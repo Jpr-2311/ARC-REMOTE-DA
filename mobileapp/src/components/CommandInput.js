@@ -13,8 +13,8 @@ export function renderCommandInput(onSubmit) {
   wrapper.className = 'command-input-wrapper';
 
   wrapper.innerHTML = `
-    <div class="command-input" id="command-input-container" style="display:flex; gap:0.5rem;">
-      <button class="command-input__mic" id="command-mic-btn" title="Voice Input" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;padding:0.5rem;display:flex;align-items:center;justify-content:center;">
+    <div class="command-input" id="command-input-container">
+      <button class="command-input__mic" id="command-mic-btn" title="Voice Input">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
           <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -28,10 +28,9 @@ export function renderCommandInput(onSubmit) {
         placeholder="Type or speak a command..."
         autocomplete="off"
         spellcheck="false"
-        style="flex:1;"
       />
-      <button class="command-input__send" id="command-send-btn" title="Send Command" style="background:none;border:none;color:var(--accent-color);cursor:pointer;padding:0.5rem;display:flex;align-items:center;justify-content:center;">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button class="command-input__send" id="command-send-btn" title="Send Command">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
         </svg>
       </button>
@@ -109,7 +108,7 @@ export function renderCommandInput(onSubmit) {
     
     recognition.onend = () => {
       isRecording = false;
-      micBtn.style.color = 'var(--text-secondary)';
+      micBtn.classList.remove('recording');
       if (input.value.trim()) {
         submit();
       }
@@ -118,7 +117,7 @@ export function renderCommandInput(onSubmit) {
     recognition.onerror = (e) => {
       console.error('Speech recognition error:', e);
       isRecording = false;
-      micBtn.style.color = 'var(--text-secondary)';
+      micBtn.classList.remove('recording');
     };
 
     micBtn.addEventListener('click', () => {
@@ -128,7 +127,7 @@ export function renderCommandInput(onSubmit) {
         input.value = '';
         recognition.start();
         isRecording = true;
-        micBtn.style.color = 'var(--error-color)'; // Red when recording
+        micBtn.classList.add('recording');
       }
     });
   } else {

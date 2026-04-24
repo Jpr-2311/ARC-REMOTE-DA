@@ -14,8 +14,11 @@ APP_ALIASES = {
     "vscode":    "vscode",
     "vs code":   "vscode",
     "code":      "vscode",
+    "vcode":     "vscode",
     "safari":    "safari",
     "chrome":    "chrome",
+    "chorme":    "chrome",
+    "crome":     "chrome",
     "terminal":  "terminal",
     "finder":    "finder",
     "notes":     "notes",
@@ -38,6 +41,8 @@ APP_ALIASES = {
     "figma":     "figma",
     "notion":    "notion",
     "obsidian":  "obsidian",
+    "gmail":     "gmail",
+    "gamil":     "gmail",
 }
 
 
@@ -88,6 +93,12 @@ def extract_amount(text: str, default: int = 10) -> int:
     for word, amount in WORD_AMOUNTS.items():
         if word in text:
             return amount
+
+    # Numeric: parse it, clamp to [0, 100]
+    match = re.search(r'\b(\d{1,4})\b', text)
+    if match:
+        val = int(match.group(1))
+        return min(100, max(0, val))  # Clamp: 1000 → 100, 0 → 0
 
     return default
 
@@ -519,30 +530,52 @@ def is_compound_file_command(text: str) -> bool:
 def is_find_and_send_command(text: str) -> bool:
     """
     Quick check: does this command contain find/search AND send to email?
+    Or is it a direct send with an attachment? ("sent abc.txt to ...")
     """
+    # Pattern 1: Explicit find/search + send
     has_find = bool(re.search(r'\b(?:find|search|get|look for)\b', text))
-    has_send = bool(re.search(r'\b(?:send|email)\b', text))
+    has_send = bool(re.search(r'\b(?:send|sent|email)\b', text))
     has_join = bool(re.search(r'\b(?:and|then|to)\b', text))
-    return has_find and has_send and has_join
+    if has_find and has_send and has_join:
+        return True
+
+    # Pattern 2: Direct send with a filename
+    # e.g., "sent abc.txt to jithinpr888@gmail.com"
+    if re.search(r'\b(?:send|sent|email)\s+.*?\.\w{1,5}\s+(?:to)\b', text, re.IGNORECASE):
+        return True
+
+    return False
 
 def extract_find_and_send_params(text: str) -> dict:
     """
-    Extracts filename and email from "find X and send it to Y"
+    Extracts filename and email from "find X and send it to Y" or "send X to Y"
     """
     result = {"filename": None, "to": None}
     
-    # Try splitting into find part and send part
+    # Pattern 1: Direct "send/sent X to Y"
+    m = re.search(r'\b(?:send|sent|email)\s+(.*?)\s+(?:to)\s+(.*)', text, re.IGNORECASE)
+    if m:
+        file_part = m.group(1).strip()
+        to_part = m.group(2).strip()
+        
+        # Make sure file_part isn't just an email parameter like "an email"
+        if "." in file_part or "file" in file_part.lower():
+            file_info = extract_filename(file_part)
+            result["filename"] = file_info.get("filename") or file_part
+            
+            email_info = extract_email_params("send to " + to_part)
+            result["to"] = email_info.get("to") or to_part
+            return result
+    
+    # Pattern 2: "find X and send to Y"
     split_match = re.split(r'\b(?:and\s+)?(?:then\s+)?(?:send|email)\b', text, maxsplit=1)
     if len(split_match) == 2:
         find_part = split_match[0].strip()
         send_part = split_match[1].strip()
         
-        # 1. Get filename from find_part
         file_info = extract_filename(find_part)
-        # If extract_filename failed, fallback to extract_query
         result["filename"] = file_info.get("filename") or extract_query(find_part)
         
-        # 2. Get email from send_part
         email_info = extract_email_params("send " + send_part)
         result["to"] = email_info.get("to")
         

@@ -26,8 +26,6 @@ async function performHealthCheck() {
     // If backend is fully booted, disable mock mode
     if (res.booted && appState.useMocks) {
       appState.setUseMocks(false);
-      const mockBtn = document.getElementById('mock-toggle-btn');
-      if (mockBtn) mockBtn.classList.remove('active');
       console.log('ARC backend is ready — switching to live mode.');
     }
   } catch {
@@ -37,20 +35,40 @@ async function performHealthCheck() {
 }
 
 /**
+ * Try health check with retries before giving up.
+ */
+async function initialHealthCheck(retries = 3, delayMs = 2000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await checkHealth();
+      appState.setConnected(true);
+      appState.setBackendBooted(res.booted === true);
+      return; // Success
+    } catch {
+      if (i < retries - 1) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  }
+  // All retries failed
+  appState.setConnected(false);
+  appState.setBackendBooted(false);
+}
+
+/**
  * Initialize the application.
  */
 async function init() {
-  // Initial health check
-  await performHealthCheck();
+  // Initial health check with retries (don't enable mock mode during boot)
+  await initialHealthCheck();
 
-  // If backend is not available or not booted, enable mock mode
-  if (!appState.connected || !appState.backendBooted) {
+  // Only enable mock mode if the server is truly unreachable after retries
+  if (!appState.connected) {
     appState.setUseMocks(true);
-    if (!appState.connected) {
-      console.log('ARC backend not reachable — mock mode enabled.');
-    } else {
-      console.log('ARC backend still booting — mock mode enabled until ready.');
-    }
+    console.log('ARC backend not reachable after retries — mock mode enabled.');
+  } else if (!appState.backendBooted) {
+    // Server running but still booting — don't use mocks, just wait
+    console.log('ARC backend still booting — will switch to live mode when ready.');
   }
 
   // Keep track of current screen so we don't remount unnecessarily
@@ -73,12 +91,6 @@ async function init() {
   // Re-render when token changes (e.g. login or automatic logout)
   appState.subscribe(renderScreen);
 
-  // Update mock toggle button state
-  const mockBtn = document.getElementById('mock-toggle-btn');
-  if (mockBtn) {
-    mockBtn.classList.toggle('active', appState.useMocks);
-  }
-
   // Periodic health checks (only when tab is visible)
   healthTimer = setInterval(performHealthCheck, CONFIG.HEALTH_CHECK_INTERVAL);
 
@@ -98,3 +110,4 @@ async function init() {
 
 // Boot
 document.addEventListener('DOMContentLoaded', init);
+

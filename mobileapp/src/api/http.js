@@ -60,7 +60,7 @@ async function request(method, path, body = null) {
 export async function sendCommand(text) {
   return request('POST', CONFIG.ENDPOINTS.COMMAND, {
     text,
-    source: 'controller',
+    source: 'remote',
     user: 'user',
   });
 }

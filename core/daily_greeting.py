@@ -124,16 +124,19 @@ def _get_news_headlines(count: int = NEWS_COUNT) -> list:
         print(f"⚠️ News fetch error: {e}")
         return []
 
-def read_news() -> None:
+def read_news() -> str:
     """Standalone capability to read current news without full morning greeting."""
     headlines = _get_news_headlines()
     if headlines:
         speak(f"Here are today's top {len(headlines)} headlines.")
         for i, headline in enumerate(headlines, 1):
             speak(f"{i}. {headline}")
-            print(f"📰 {i}. {headline}")
+            print(f"{i}. {headline}")
+        lines = [f"{i}. {h}" for i, h in enumerate(headlines, 1)]
+        return "Today's headlines: " + " | ".join(lines)
     else:
         speak("Couldn't fetch the news right now.")
+        return "Couldn't fetch the news right now."
 
 
 

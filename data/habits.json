@@ -1,35 +1,26 @@
 [
   {
-    "action": "chat_response",
-    "params": {},
-    "hour": 12,
-    "weekday": -1,
-    "occurrences": 11,
-    "confidence": 0.917,
-    "last_seen": "2026-04-23 16:24:24",
-    "description": "chat_response usually at 12:00 (11 times, 92% confidence)"
-  },
-  {
-    "action": "find_and_send",
+    "action": "send_email",
     "params": {
-      "filename": "doc1wire.pdf",
-      "to": "laasya2279@gmail.com"
+      "to": "jithinpr888@gmail.com",
+      "subject": null,
+      "body": null
     },
-    "hour": 15,
+    "hour": 14,
     "weekday": -1,
-    "occurrences": 19,
-    "confidence": 0.679,
-    "last_seen": "2026-04-23 13:08:38",
-    "description": "find_and_send usually at 15:00 (19 times, 68% confidence)"
+    "occurrences": 4,
+    "confidence": 0.667,
+    "last_seen": "2026-04-24 14:09:47",
+    "description": "send_email usually at 14:00 (4 times, 67% confidence)"
   },
   {
-    "action": "tell_time",
+    "action": "shutdown_pc_cancelled",
     "params": {},
-    "hour": 3,
+    "hour": 21,
     "weekday": -1,
     "occurrences": 2,
     "confidence": 0.667,
-    "last_seen": "2026-04-23 16:24:24",
-    "description": "tell_time usually at 3:00 (2 times, 67% confidence)"
+    "last_seen": "2026-04-24 22:09:39",
+    "description": "shutdown_pc_cancelled usually at 21:00 (2 times, 67% confidence)"
   }
 ]

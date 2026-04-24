@@ -27,9 +27,12 @@ export function renderClarifyPrompt(jobId, onReply) {
   const input = el.querySelector(`#clarify-input-${jobId}`);
   const btn = el.querySelector(`#clarify-submit-${jobId}`);
 
+  let submitted = false; // Guard against duplicate submissions
+
   async function submit() {
     const answer = input.value.trim();
-    if (!answer) return;
+    if (!answer || submitted) return;
+    submitted = true;
 
     btn.disabled = true;
     input.disabled = true;
@@ -43,6 +46,7 @@ export function renderClarifyPrompt(jobId, onReply) {
       }
       onReply?.(answer);
     } catch (err) {
+      submitted = false;
       btn.disabled = false;
       input.disabled = false;
       btn.textContent = 'Retry';

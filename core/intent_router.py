@@ -65,7 +65,7 @@ from core.ambiguity_resolver import build_single_slot_question
 from core.instant_responses import get_instant_response, get_confirmation_prompt
 
 def ask_user_input(prompt: str, source: str, request_id: str, event_type: str = "clarify") -> str:
-    if source == "api":
+    if source != "voice":
         try:
             from remote.job_store import ask_user
             return ask_user(request_id, prompt, event_type)
@@ -432,9 +432,15 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
             func_name = f"open_{target.lower().replace(' ', '_')}"
             if func_name in actions:
                 actions[func_name]()
+                success = True
             else:
                 from control import open_any_app
-                open_any_app(target)
+                # Handle boolean return if platform supports it
+                res = open_any_app(target)
+                success = res if res is not None else True
+
+            if not success:
+                return ActionResult.fail(action, f"Could not find app '{target}'", data={"target": target})
 
             # ── Auto-play focus music for productive apps ────
             PRODUCTIVE_APPS = {"vscode", "terminal", "xcode", "sublime", "pycharm", "intellij"}
@@ -476,6 +482,19 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
             if "volume_down" in actions:
                 actions["volume_down"](amount)
                 return ActionResult.ok(action, f"Volume down by {amount}", data={"amount": amount})
+
+        # ── Brightness ──────────────────────────────────────
+        if action == "brightness_up":
+            amount = params.get("amount", 10)
+            if "brightness_up" in actions:
+                actions["brightness_up"](amount)
+                return ActionResult.ok(action, f"Brightness up by {amount}%", data={"amount": amount})
+
+        if action == "brightness_down":
+            amount = params.get("amount", 10)
+            if "brightness_down" in actions:
+                actions["brightness_down"](amount)
+                return ActionResult.ok(action, f"Brightness down by {amount}%", data={"amount": amount})
 
         # ── Search Google ───────────────────────────────────
         if action == "search_google":
@@ -742,8 +761,13 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
         # ── Generic action ──────────────────────────────────
         if action in actions:
             result = actions[action]()
-            summary = f"Executed {action}" + (f": {result}" if result else "")
-            return ActionResult.ok(action, summary)
+            # Use the return value as the human-readable summary if it's a string
+            if result and isinstance(result, str):
+                summary = result
+            else:
+                summary = f"Executed {action}" + (f": {result}" if result else "")
+            result_data = {"result": str(result)} if result is not None else {}
+            return ActionResult.ok(action, summary, data=result_data)
 
         return ActionResult.fail(action, f"Unknown action: {action}")
 
@@ -952,6 +976,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
                     resumed.get("confidence", 0.8),
                     has_context_reference=False,
                     word_count=len(command.split()),
+                    source=_source
                 )
                 if safety.decision == SafetyDecision.CONFIRM:
                     prompt = get_confirmation(action, params)
@@ -1216,7 +1241,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
         conf_result.score = 0.0  
 
     # ── Step 6: Safety check ─────────────────────────────────
-    safety = check_safety(intent.action, conf_result.score, has_ctx, word_count=len(cleaned.split()))
+    safety = check_safety(intent.action, conf_result.score, has_ctx, word_count=len(cleaned.split()), source=_source)
     missing_params = get_missing_params(intent.action, params)
     if missing_params and safety.decision in {SafetyDecision.EXECUTE, SafetyDecision.CONFIRM}:
         safety = SafetyDecision(
@@ -1365,7 +1390,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
     elif safety.decision == SafetyDecision.CONFIRM:
         # Use response_policy for confirmation prompt
         prompt = get_confirmation(intent.action, params)
-        if _source == "api":
+        if _source != "voice":
             confirmed_resp = ask_user_input(prompt, _source, _request_id, event_type="confirm")
             confirmed = confirmed_resp.strip().lower() in ("yes", "y", "confirm", "ok", "sure", "do it")
         else:
@@ -1486,7 +1511,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
             question = get_clarification(intent.action, params)
             missing_param = missing_params[0] if missing_params else "target"
 
-        if _source == "api":
+        if _source != "voice":
             resp = ask_user_input(question, _source, _request_id, event_type="clarify")
             if resp:
                 from core.runtime import store_result
@@ -1530,7 +1555,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
 
     # ── DECISION: GEMINI FALLBACK ────────────────────────────
     elif safety.decision == SafetyDecision.GEMINI:
-        if _source == "api":
+        if _source != "voice":
             # Remote/API mode should never hard-depend on voice/Gemini loops.
             # Fail closed with a clear message so the controller can rephrase.
             msg = "I couldn't understand that well enough to act. Please rephrase."

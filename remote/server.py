@@ -1,10 +1,13 @@
 import sys
+import os
 import threading
 import uuid
 import asyncio
 from typing import Optional
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import time
@@ -13,8 +16,9 @@ from remote.job_store import get_job_store, JobEvent
 from remote.db import save_job
 from remote.auth import generate_pairing_code, verify_pairing_code, create_access_token, verify_access_token
 from remote.security import log_audit_event
+from remote.allowlist import validate_command
 
-app = FastAPI(title="ARC Remote Daemon (Phase 1)")
+app = FastAPI(title="ARC Remote Daemon")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +29,7 @@ app.add_middleware(
 
 class CommandIn(BaseModel):
     text: str
-    source: str = "api"
+    source: str = "remote"
 
 class ReplyIn(BaseModel):
     answer: str
@@ -71,6 +75,37 @@ def health_check():
     booted = getattr(runtime, "_booted", False)
     return {"status": "ok", "booted": booted}
 
+import queue
+
+_command_queue = queue.Queue()
+
+def _command_worker():
+    while True:
+        job_id, body_text, body_source, device = _command_queue.get()
+        job = get_job_store().get(job_id)
+        if not job:
+            _command_queue.task_done()
+            continue
+            
+        try:
+            res = runtime.execute_text_command(
+                text=body_text,
+                source=body_source,
+                session_id=job_id,
+                user=device
+            )
+            if res.status == "completed":
+                job.add_event(JobEvent("result", res.final_result or "Completed", data=res.to_dict()))
+            else:
+                job.add_event(JobEvent("error", res.final_result or "Failed", data=res.to_dict()))
+        except Exception as e:
+            job.add_event(JobEvent("error", str(e)))
+        finally:
+            _command_queue.task_done()
+
+# Start the persistent worker thread
+threading.Thread(target=_command_worker, daemon=True, name="CommandWorkerThread").start()
+
 @app.post("/command")
 def run_command(body: CommandIn, device: str = Depends(get_current_device)):
     """
@@ -78,6 +113,12 @@ def run_command(body: CommandIn, device: str = Depends(get_current_device)):
     """
     if not runtime._booted:
         raise HTTPException(status_code=503, detail="Runtime booting.")
+
+    # Security: validate command against allowlist
+    allowed, reason = validate_command(body.text)
+    if not allowed:
+        log_audit_event("blocked", device, "blocked_command", f"{body.text} — {reason}")
+        raise HTTPException(status_code=400, detail=reason)
 
     job_id = str(uuid.uuid4())
     job = get_job_store().get_or_create(job_id)
@@ -88,20 +129,9 @@ def run_command(body: CommandIn, device: str = Depends(get_current_device)):
     
     job.add_event(JobEvent("ack", f"Command received: {body.text}"))
 
-    def _run():
-        # Session ID is the job_id so intent_router can access it
-        res = runtime.execute_text_command(
-            text=body.text,
-            source=body.source,
-            session_id=job_id,
-            user=device
-        )
-        if res.status == "completed":
-            job.add_event(JobEvent("result", res.final_result or "Completed", data=res.to_dict()))
-        else:
-            job.add_event(JobEvent("error", res.final_result or "Failed", data=res.to_dict()))
-
-    threading.Thread(target=_run, daemon=True).start()
+    # Enqueue for execution on the persistent worker thread
+    _command_queue.put((job_id, body.text, body.source, device))
+    
     return {"job_id": job_id}
 
 @app.post("/reply/{job_id}")
@@ -164,6 +194,21 @@ async def stream_job(websocket: WebSocket, job_id: str):
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         pass
+
+# ── Static file serving (production) ─────────────────────────
+# Serve the built mobileapp UI from FastAPI so everything runs on one port.
+# In development, use Vite dev server (port 5173) with proxy instead.
+_static_dir = Path(__file__).resolve().parent.parent / "mobileapp" / "dist"
+if _static_dir.is_dir():
+    from starlette.responses import FileResponse
+
+    @app.get("/")
+    def serve_index():
+        return FileResponse(str(_static_dir / "index.html"))
+
+    # Mount static assets (JS, CSS, etc.) — must be AFTER all API routes
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
+    print(f"  Serving UI from {_static_dir}")
 
 if __name__ == "__main__":
     import uvicorn

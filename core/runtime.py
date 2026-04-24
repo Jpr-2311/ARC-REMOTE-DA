@@ -92,7 +92,7 @@ def _initialize_actions() -> bool:
     global ACTIONS
     try:
         from control import (
-            open_vscode, open_safari, open_terminal,
+            open_vscode, open_safari, open_terminal, open_spotify,
             search_google, tell_time, tell_date,
             lock_screen, shutdown_pc, restart_pc, sleep_mac,
             morning_briefing, tell_weather,
@@ -138,6 +138,7 @@ def _initialize_actions() -> bool:
     _action_candidates = {
         "open_vscode": "open_vscode", "open_safari": "open_safari",
         "open_terminal": "open_terminal", "search_google": "search_google",
+        "open_spotify": "open_spotify",
         "tell_time": "tell_time", "tell_date": "tell_date",
         "lock_screen": "lock_screen", "shutdown_pc": "shutdown_pc",
         "restart_pc": "restart_pc", "sleep_mac": "sleep_mac",

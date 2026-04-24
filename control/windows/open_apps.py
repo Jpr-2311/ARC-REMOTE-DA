@@ -65,6 +65,12 @@ def open_settings():
 def open_chrome():
     subprocess.Popen(["start", "chrome"], shell=True)
 
+def open_spotify():
+    # Spotify is often a UWP app, protocol handler is more reliable
+    result = subprocess.run(["start", "spotify:"], shell=True, capture_output=True)
+    if result.returncode != 0:
+        subprocess.Popen(["start", "spotify"], shell=True)
+
 def open_browser():
     import webbrowser
     webbrowser.open("https://google.com")
@@ -75,8 +81,8 @@ def open_notepad():
 def open_explorer():
     subprocess.Popen(["explorer.exe"])
 
-def open_any_app(app_name: str) -> None:
-    """Opens any app by name — Windows finds it via Start menu / PATH."""
+def open_any_app(app_name: str) -> bool:
+    """Opens any app by name — Windows finds it via Start menu / PATH. Returns True if opened."""
     import subprocess
     # Common app name → executable mapping
     app_map = {
@@ -124,5 +130,7 @@ def open_any_app(app_name: str) -> None:
     if result.returncode != 0:
         print(f"❌ Couldn't find app: {app_name}")
         speak(f"Couldn't find {app_name} on your PC.")
+        return False
     else:
         print(f"✅ Opened: {app_name}")
+        return True

@@ -33,7 +33,20 @@ async function onCommandSubmit(text) {
 async function handleRealCommand(text) {
   try {
     const res = await sendCommand(text);
-    const jobId = res.job_id;
+    const jobId = res?.job_id;
+
+    // Guard: if server returned no job_id, fail fast with a clear error
+    if (!jobId || jobId === 'undefined') {
+      const failJobId = `local-${Date.now()}`;
+      jobStore.createJob(failJobId, text);
+      handleEvent(failJobId, {
+        type: 'error',
+        message: 'Server returned no job ID. Make sure you are running remote.server:app, not main_ui:app.',
+        data: { received: res },
+        timestamp: Date.now() / 1000,
+      });
+      return;
+    }
 
     // Create job in store
     jobStore.createJob(jobId, text);
@@ -91,11 +104,12 @@ async function handleRealCommand(text) {
  * Mock flow: simulated events via mockService.
  */
 function handleMockCommand(text) {
-  const { jobId } = simulateCommand(text, (event) => {
-    handleEvent(jobId, event);
-  });
+  const mockJobId = `mock-${Date.now()}`;
+  jobStore.createJob(mockJobId, text);
 
-  jobStore.createJob(jobId, text);
+  simulateCommand(text, (event) => {
+    handleEvent(mockJobId, event);
+  });
 }
 
 /**

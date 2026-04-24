@@ -630,63 +630,18 @@ def _get_cross_encoder():
 def _get_model():
     """
     Lazy-load the sentence transformer model.
-
-    Resolution order:
-      1. SENTENCE_TRANSFORMERS_HOME env var → local directory (fully offline)
-      2. Default HuggingFace cache (~/.cache/huggingface/hub) if already cached
-      3. Network download as last resort
-
-    Raises RuntimeError with a clear message if the model cannot be loaded,
-    so callers can degrade gracefully instead of stalling.
     """
     global _model
     if _model is None:
-        import os
         from sentence_transformers import SentenceTransformer
-
-        MODEL_NAME = "all-MiniLM-L6-v2"
-
-        # 1. Check for an explicit local path override
-        local_path = os.environ.get("SENTENCE_TRANSFORMERS_HOME", "")
-        if local_path:
-            candidate = os.path.join(local_path, MODEL_NAME)
-            if os.path.isdir(candidate):
-                print(f"Loading sentence-transformer from local path: {candidate}")
-                try:
-                    _model = SentenceTransformer(candidate)
-                    print("Model loaded (offline).")
-                    return _model
-                except Exception as e:
-                    print(f"Warning: local model load failed ({e}), trying cache...")
-
-        # 2. Check default HuggingFace cache — skip network if already cached
-        cache_dir = os.path.expanduser(
-            os.environ.get("HF_HOME",
-                os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub"))
-        )
-        # HF hub stores models as "models--org--name"
-        hf_cache_name = f"models--sentence-transformers--{MODEL_NAME}"
-        if os.path.isdir(os.path.join(cache_dir, hf_cache_name)):
-            print(f"Loading sentence-transformer from HuggingFace cache...")
-            try:
-                cache_path = os.path.join(cache_dir, hf_cache_name, "snapshots")
-                if os.path.isdir(cache_path):
-                    snapshots = [d for d in os.listdir(cache_path) if os.path.isdir(os.path.join(cache_path, d))]
-                    if snapshots:
-                        local_path = os.path.join(cache_path, snapshots[0])
-                        _model = SentenceTransformer(local_path, local_files_only=True)
-                        print("Model loaded (cached).")
-                        return _model
-                print("No valid snapshots found in cache.")
-            except Exception as e:
-                print(f"Warning: offline load failed ({e})")
-
-        # 3. Fail fast if not cached
-        raise RuntimeError(
-            f"Could not load sentence-transformer model '{MODEL_NAME}' locally.\n"
-            f"Network downloads are disabled to prevent cold-start hangs.\n"
-            f"Fix: Download the model manually first or set SENTENCE_TRANSFORMERS_HOME."
-        )
+        print("Loading sentence-transformer model...")
+        try:
+            # The model was successfully downloaded and cached in the previous step,
+            # so this will instantly load it from the standard HF_HOME cache.
+            _model = SentenceTransformer("all-MiniLM-L6-v2")
+            print("Model loaded successfully.")
+        except Exception as e:
+            raise RuntimeError(f"Could not load sentence-transformer model: {e}")
     return _model
 
 
@@ -810,6 +765,11 @@ def classify(text: str) -> IntentResult:
     global _cross_encoder
     if not text or not text.strip():
         return IntentResult(action="", confidence=0.0, source="none")
+
+    # Hardcoded blocklist for pure profanity inputs that cosine similarity might misinterpret
+    profanity_blocklist = {"fuck", "fuck you", "fuck off", "fuck me", "shit", "bitch", "asshole", "cunt", "dick", "idiot", "stupid", "shut up", "dumbass"}
+    if text.strip().lower() in profanity_blocklist:
+        return IntentResult(action="unknown", confidence=1.0, source="filter")
 
     if _intent_embeddings is None:
         initialize()
