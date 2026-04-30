@@ -131,12 +131,13 @@ def read_news() -> str:
         speak(f"Here are today's top {len(headlines)} headlines.")
         for i, headline in enumerate(headlines, 1):
             speak(f"{i}. {headline}")
-            print(f"{i}. {headline}")
-        lines = [f"{i}. {h}" for i, h in enumerate(headlines, 1)]
-        return "Today's headlines: " + " | ".join(lines)
+            print(f"📰 {i}. {headline}")
+        joined = "\n".join(f"{i}. {headline}" for i, headline in enumerate(headlines, 1))
+        return f"Here are today's top {len(headlines)} headlines:\n{joined}"
     else:
-        speak("Couldn't fetch the news right now.")
-        return "Couldn't fetch the news right now."
+        message = "Couldn't fetch the news right now."
+        speak(message)
+        return message
 
 
 

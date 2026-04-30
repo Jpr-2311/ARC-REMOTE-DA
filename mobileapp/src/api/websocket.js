@@ -1,65 +1,9 @@
 /**
  * ARC Controller — WebSocket Manager
  * Manages WebSocket connections for real-time job event streaming.
- * Falls back to HTTP polling if WebSocket fails.
  */
 
 import CONFIG from '../utils/config.js';
-import appState from '../state/appState.js';
-
-/**
- * Poll job events via HTTP as a fallback.
- */
-function startHttpPolling(jobId, callbacks, intervalMs = 2000) {
-  const { onEvent, onClose } = callbacks;
-  let lastEventCount = 0;
-  let stopped = false;
-
-  const poll = async () => {
-    if (stopped) return;
-    try {
-      const headers = {};
-      if (appState.token) {
-        headers['Authorization'] = `Bearer ${appState.token}`;
-      }
-      const res = await fetch(`${CONFIG.API_BASE}/jobs/${jobId}`, { headers });
-      if (!res.ok) {
-        if (res.status === 404) {
-          stopped = true;
-          onClose?.({ clean: true });
-          return;
-        }
-        return; // Retry next interval
-      }
-      const data = await res.json();
-      const events = data.events || [];
-
-      // Emit only new events
-      for (let i = lastEventCount; i < events.length; i++) {
-        onEvent?.(events[i]);
-        if (events[i].type === 'result' || events[i].type === 'error') {
-          stopped = true;
-          onClose?.({ clean: true });
-          return;
-        }
-      }
-      lastEventCount = events.length;
-    } catch (err) {
-      console.warn('HTTP poll error:', err);
-    }
-
-    if (!stopped) {
-      setTimeout(poll, intervalMs);
-    }
-  };
-
-  poll();
-
-  return {
-    close() { stopped = true; },
-    isConnected() { return !stopped; },
-  };
-}
 
 /**
  * Connect to a job's event stream via WebSocket.
@@ -74,7 +18,6 @@ export function connectToJob(jobId, callbacks = {}) {
   let reconnectAttempts = 0;
   let closed = false;
   let connected = false;
-  let pollingFallback = null;
 
   function connect() {
     if (closed) return;
@@ -121,9 +64,8 @@ export function connectToJob(jobId, callbacks = {}) {
         const delay = CONFIG.WS_RECONNECT_DELAY * Math.pow(2, reconnectAttempts - 1);
         setTimeout(connect, delay);
       } else {
-        // Fall back to HTTP polling
-        console.warn(`WS failed after ${CONFIG.WS_MAX_RECONNECTS} attempts — switching to HTTP polling`);
-        pollingFallback = startHttpPolling(jobId, { onEvent, onClose });
+        closed = true;
+        onClose?.({ clean: false, reason: 'Max reconnection attempts reached' });
       }
     };
   }
@@ -134,14 +76,12 @@ export function connectToJob(jobId, callbacks = {}) {
     close() {
       closed = true;
       connected = false;
-      if (pollingFallback) pollingFallback.close();
       if (ws && ws.readyState <= WebSocket.OPEN) {
         ws.close();
       }
     },
     isConnected() {
-      return connected || (pollingFallback?.isConnected() ?? false);
+      return connected;
     },
   };
 }
-

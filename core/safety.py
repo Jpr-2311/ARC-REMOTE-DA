@@ -64,7 +64,7 @@ class SafetyDecision:
         return f"SafetyDecision({self.decision}, confidence={self.confidence:.2f}, reason='{self.reason}')"
 
 
-def check_safety(action: str, confidence: float, has_context_reference: bool = False, word_count: int = 0, source: str = "voice") -> SafetyDecision:
+def check_safety(action: str, confidence: float, has_context_reference: bool = False, word_count: int = 0) -> SafetyDecision:
     """
     Decides whether to execute, confirm, or fall back to Gemini.
 
@@ -73,23 +73,30 @@ def check_safety(action: str, confidence: float, has_context_reference: bool = F
         confidence:            Intent engine confidence (0.0 - 1.0)
         has_context_reference: True if command contains pronouns like "it", "that"
         word_count:            Number of words in the command (for garbage detection)
-        source:                Input source ("voice", "api", "phone", etc.)
     """
-    # Very short input (1-2 words) with low confidence → garbage, skip
-    # (Only applies to voice; text/API inputs are intentional, not background noise)
-    if source == "voice" and word_count <= 2 and confidence < HIGH_CONFIDENCE:
-        return SafetyDecision(
-            SafetyDecision.GEMINI,
-            "Too short to be meaningful — needs Gemini",
-            action,
-            confidence
-        )
-
     # Absolute confidence floor — below this, nothing should execute
     if confidence < CONFIDENCE_FLOOR:
         return SafetyDecision(
             SafetyDecision.GEMINI,
             "Below minimum confidence floor — needs Gemini",
+            action,
+            confidence
+        )
+
+    # Destructive short commands like "sleep" are valid if the action is clear.
+    if action in DESTRUCTIVE_ACTIONS and confidence >= 0.60:
+        return SafetyDecision(
+            SafetyDecision.CONFIRM,
+            f"'{action}' is destructive — confirmation required",
+            action,
+            confidence
+        )
+
+    # Very short input (1-2 words) with low confidence → garbage, skip
+    if word_count <= 2 and confidence < HIGH_CONFIDENCE:
+        return SafetyDecision(
+            SafetyDecision.GEMINI,
+            "Too short to be meaningful — needs Gemini",
             action,
             confidence
         )

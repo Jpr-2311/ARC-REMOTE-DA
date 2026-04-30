@@ -48,15 +48,9 @@ export function renderConfirmPrompt(jobId, onReply, event = {}) {
   const yesBtn = el.querySelector(`#confirm-yes-${jobId}`);
   const noBtn = el.querySelector(`#confirm-no-${jobId}`);
 
-  let submitted = false; // Guard against duplicate submissions
-
   async function respond(answer) {
-    if (submitted) return;
-    submitted = true;
-
     yesBtn.disabled = true;
     noBtn.disabled = true;
-    document.removeEventListener('keydown', onKey);
 
     try {
       if (appState.useMocks) {
@@ -66,7 +60,6 @@ export function renderConfirmPrompt(jobId, onReply, event = {}) {
       }
       onReply?.(answer);
     } catch (err) {
-      submitted = false;
       yesBtn.disabled = false;
       noBtn.disabled = false;
       console.error('Failed to send confirmation:', err);
@@ -78,8 +71,8 @@ export function renderConfirmPrompt(jobId, onReply, event = {}) {
 
   // Keyboard shortcuts
   function onKey(e) {
-    if (e.key === 'y' || e.key === 'Y') respond('yes');
-    if (e.key === 'n' || e.key === 'N') respond('no');
+    if (e.key === 'y' || e.key === 'Y') { respond('yes'); document.removeEventListener('keydown', onKey); }
+    if (e.key === 'n' || e.key === 'N') { respond('no'); document.removeEventListener('keydown', onKey); }
   }
   document.addEventListener('keydown', onKey);
 

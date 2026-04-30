@@ -33,20 +33,22 @@ async function onCommandSubmit(text) {
 async function handleRealCommand(text) {
   try {
     const res = await sendCommand(text);
-    const jobId = res?.job_id;
 
-    // Guard: if server returned no job_id, fail fast with a clear error
-    if (!jobId || jobId === 'undefined') {
-      const failJobId = `local-${Date.now()}`;
-      jobStore.createJob(failJobId, text);
-      handleEvent(failJobId, {
-        type: 'error',
-        message: 'Server returned no job ID. Make sure you are running remote.server:app, not main_ui:app.',
-        data: { received: res },
+    // Gracefully handle legacy/direct backends that return CommandResponse JSON
+    // instead of the Phase 1 job protocol.
+    if (!res?.job_id) {
+      const jobId = `direct-${Date.now()}`;
+      jobStore.createJob(jobId, text);
+      handleEvent(jobId, {
+        type: res?.status === 'completed' ? 'result' : 'error',
+        message: res?.final_result || 'The backend did not return a job id.',
+        data: res || {},
         timestamp: Date.now() / 1000,
       });
       return;
     }
+
+    const jobId = res.job_id;
 
     // Create job in store
     jobStore.createJob(jobId, text);
@@ -104,12 +106,11 @@ async function handleRealCommand(text) {
  * Mock flow: simulated events via mockService.
  */
 function handleMockCommand(text) {
-  const mockJobId = `mock-${Date.now()}`;
-  jobStore.createJob(mockJobId, text);
-
-  simulateCommand(text, (event) => {
-    handleEvent(mockJobId, event);
+  const { jobId } = simulateCommand(text, (event) => {
+    handleEvent(jobId, event);
   });
+
+  jobStore.createJob(jobId, text);
 }
 
 /**

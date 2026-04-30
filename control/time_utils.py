@@ -4,15 +4,15 @@ from core.voice_response import speak
 def tell_time():
     now = datetime.now()
     formatted = now.strftime("%I:%M %p").lstrip("0")
-    msg = f"It's {formatted}"
-    speak(msg)
-    print(f"🕐 {msg}")
-    return msg
+    message = f"It's {formatted}"
+    speak(message)
+    print(f"🕐 {message}")
+    return message
 
 def tell_date():
     now = datetime.now()
     formatted = now.strftime("%A, %B %d").replace(" 0", " ")
-    msg = f"Today is {formatted}"
-    speak(msg)
-    print(f"📅 {msg}")
-    return msg
+    message = f"Today is {formatted}"
+    speak(message)
+    print(f"📅 {formatted}")
+    return message

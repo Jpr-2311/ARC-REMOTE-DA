@@ -1,13 +1,10 @@
 import sys
-import os
 import threading
 import uuid
 import asyncio
 from typing import Optional
-from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import time
@@ -16,9 +13,8 @@ from remote.job_store import get_job_store, JobEvent
 from remote.db import save_job
 from remote.auth import generate_pairing_code, verify_pairing_code, create_access_token, verify_access_token
 from remote.security import log_audit_event
-from remote.allowlist import validate_command
 
-app = FastAPI(title="ARC Remote Daemon")
+app = FastAPI(title="ARC Remote Daemon (Phase 1)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +25,7 @@ app.add_middleware(
 
 class CommandIn(BaseModel):
     text: str
-    source: str = "remote"
+    source: str = "api"
 
 class ReplyIn(BaseModel):
     answer: str
@@ -67,6 +63,42 @@ def get_code():
     # Only for testing/local UI. Real setup would display on desktop screen.
     return {"code": generate_pairing_code()}
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
+
+try:
+    app.mount("/assets", StaticFiles(directory="ui/assets"), name="assets")
+except Exception:
+    pass
+
+@app.get("/")
+def home():
+    import os
+    if os.path.exists("ui/index.html"):
+        return FileResponse("ui/index.html")
+    return JSONResponse({"status": "ARC Remote Daemon", "version": "1.0.0"})
+
+@app.get("/manifest.json")
+def manifest():
+    import os
+    if os.path.exists("ui/manifest.json"):
+        return FileResponse("ui/manifest.json")
+    raise HTTPException(status_code=404)
+
+@app.get("/sw.js")
+def sw():
+    import os
+    if os.path.exists("ui/sw.js"):
+        return FileResponse("ui/sw.js")
+    raise HTTPException(status_code=404)
+
+@app.get("/favicon.svg")
+def favicon():
+    import os
+    if os.path.exists("ui/favicon.svg"):
+        return FileResponse("ui/favicon.svg")
+    raise HTTPException(status_code=404)
+
 @app.get("/health")
 def health_check():
     """
@@ -75,37 +107,6 @@ def health_check():
     booted = getattr(runtime, "_booted", False)
     return {"status": "ok", "booted": booted}
 
-import queue
-
-_command_queue = queue.Queue()
-
-def _command_worker():
-    while True:
-        job_id, body_text, body_source, device = _command_queue.get()
-        job = get_job_store().get(job_id)
-        if not job:
-            _command_queue.task_done()
-            continue
-            
-        try:
-            res = runtime.execute_text_command(
-                text=body_text,
-                source=body_source,
-                session_id=job_id,
-                user=device
-            )
-            if res.status == "completed":
-                job.add_event(JobEvent("result", res.final_result or "Completed", data=res.to_dict()))
-            else:
-                job.add_event(JobEvent("error", res.final_result or "Failed", data=res.to_dict()))
-        except Exception as e:
-            job.add_event(JobEvent("error", str(e)))
-        finally:
-            _command_queue.task_done()
-
-# Start the persistent worker thread
-threading.Thread(target=_command_worker, daemon=True, name="CommandWorkerThread").start()
-
 @app.post("/command")
 def run_command(body: CommandIn, device: str = Depends(get_current_device)):
     """
@@ -113,12 +114,6 @@ def run_command(body: CommandIn, device: str = Depends(get_current_device)):
     """
     if not runtime._booted:
         raise HTTPException(status_code=503, detail="Runtime booting.")
-
-    # Security: validate command against allowlist
-    allowed, reason = validate_command(body.text)
-    if not allowed:
-        log_audit_event("blocked", device, "blocked_command", f"{body.text} — {reason}")
-        raise HTTPException(status_code=400, detail=reason)
 
     job_id = str(uuid.uuid4())
     job = get_job_store().get_or_create(job_id)
@@ -129,9 +124,46 @@ def run_command(body: CommandIn, device: str = Depends(get_current_device)):
     
     job.add_event(JobEvent("ack", f"Command received: {body.text}"))
 
-    # Enqueue for execution on the persistent worker thread
-    _command_queue.put((job_id, body.text, body.source, device))
-    
+    def _run():
+        try:
+            # ── Stage 1: Routing ─────────────────────────────────
+            job.add_event(JobEvent(
+                "progress", "Routing command...",
+                data={"stage": "routing", "step": 1, "total_steps": 4}
+            ))
+
+            # ── Stage 2: Classifying intent ──────────────────────
+            job.add_event(JobEvent(
+                "executing", f"Classifying: {body.text}",
+                data={"stage": "classifying", "step": 2, "total_steps": 4}
+            ))
+
+            # Session ID is the job_id so intent_router can access it
+            res = runtime.execute_text_command(
+                text=body.text,
+                source=body.source,
+                session_id=job_id,
+                user=device
+            )
+
+            if res.status == "completed":
+                action = getattr(res, 'interpreted_action', None) or res.to_dict().get('interpreted_action', '')
+
+                # ── Stage 3: Verification (skip for chat/question intents)
+                if action and action not in ('general_chat', 'answer_question', 'chat_response'):
+                    job.add_event(JobEvent(
+                        "verify", f"Verified: {action}",
+                        data={"stage": "verifying", "action": action, "step": 3, "total_steps": 4}
+                    ))
+
+                # ── Stage 4: Final result ────────────────────────
+                job.add_event(JobEvent("result", res.final_result or "Completed", data=res.to_dict()))
+            else:
+                job.add_event(JobEvent("error", res.final_result or "Failed", data=res.to_dict()))
+        except Exception as e:
+            job.add_event(JobEvent("error", f"Internal error: {str(e)}", data={"traceback": str(e)}))
+
+    threading.Thread(target=_run, daemon=True).start()
     return {"job_id": job_id}
 
 @app.post("/reply/{job_id}")
@@ -195,21 +227,56 @@ async def stream_job(websocket: WebSocket, job_id: str):
     except WebSocketDisconnect:
         pass
 
-# ── Static file serving (production) ─────────────────────────
-# Serve the built mobileapp UI from FastAPI so everything runs on one port.
-# In development, use Vite dev server (port 5173) with proxy instead.
-_static_dir = Path(__file__).resolve().parent.parent / "mobileapp" / "dist"
-if _static_dir.is_dir():
-    from starlette.responses import FileResponse
+import datetime
 
-    @app.get("/")
-    def serve_index():
-        return FileResponse(str(_static_dir / "index.html"))
+@app.get("/suggestions")
+def get_suggestions(device: str = Depends(get_current_device)):
+    """
+    Returns dynamic command suggestions based on time of day.
+    Used by the mobile app to show contextual hint buttons.
+    """
+    hour = datetime.datetime.now().hour
+    suggestions = []
 
-    # Mount static assets (JS, CSS, etc.) — must be AFTER all API routes
-    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
-    print(f"  Serving UI from {_static_dir}")
+    # Time-based suggestions
+    if 5 <= hour < 12:
+        suggestions.extend([
+            {"cmd": "good morning", "icon": "☀️", "label": "Good morning"},
+            {"cmd": "read my emails", "icon": "📧", "label": "Check emails"},
+            {"cmd": "read the news", "icon": "📰", "label": "Today's news"},
+        ])
+    elif 12 <= hour < 17:
+        suggestions.extend([
+            {"cmd": "take a screenshot", "icon": "📸", "label": "Screenshot"},
+            {"cmd": "what time is it", "icon": "🕐", "label": "Check time"},
+            {"cmd": "search my emails", "icon": "📧", "label": "Search emails"},
+        ])
+    elif 17 <= hour < 22:
+        suggestions.extend([
+            {"cmd": "play some music", "icon": "🎵", "label": "Play music"},
+            {"cmd": "get battery level", "icon": "🔋", "label": "Battery"},
+            {"cmd": "lock screen", "icon": "🔒", "label": "Lock screen"},
+        ])
+    else:
+        suggestions.extend([
+            {"cmd": "good night", "icon": "🌙", "label": "Good night"},
+            {"cmd": "lock screen", "icon": "🔒", "label": "Lock screen"},
+            {"cmd": "sleep", "icon": "😴", "label": "Sleep Mac"},
+        ])
+
+    # Always available
+    suggestions.extend([
+        {"cmd": "open chrome", "icon": "🌐", "label": "Open Chrome"},
+        {"cmd": "find my files", "icon": "📁", "label": "Find files"},
+        {"cmd": "volume up", "icon": "🔊", "label": "Volume up"},
+        {"cmd": "send an email", "icon": "✉️", "label": "Send email"},
+        {"cmd": "create a file", "icon": "📄", "label": "New file"},
+        {"cmd": "what can you do", "icon": "💡", "label": "Help"},
+    ])
+
+    return {"suggestions": suggestions}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

@@ -14,11 +14,8 @@ APP_ALIASES = {
     "vscode":    "vscode",
     "vs code":   "vscode",
     "code":      "vscode",
-    "vcode":     "vscode",
     "safari":    "safari",
     "chrome":    "chrome",
-    "chorme":    "chrome",
-    "crome":     "chrome",
     "terminal":  "terminal",
     "finder":    "finder",
     "notes":     "notes",
@@ -41,8 +38,6 @@ APP_ALIASES = {
     "figma":     "figma",
     "notion":    "notion",
     "obsidian":  "obsidian",
-    "gmail":     "gmail",
-    "gamil":     "gmail",
 }
 
 
@@ -94,12 +89,6 @@ def extract_amount(text: str, default: int = 10) -> int:
         if word in text:
             return amount
 
-    # Numeric: parse it, clamp to [0, 100]
-    match = re.search(r'\b(\d{1,4})\b', text)
-    if match:
-        val = int(match.group(1))
-        return min(100, max(0, val))  # Clamp: 1000 → 100, 0 → 0
-
     return default
 
 
@@ -111,7 +100,7 @@ def extract_query(text: str) -> Optional[str]:
     """
     # "search for X", "search X", "look up X", "google X", "find X"
     patterns = [
-        r'(?:search|google|look up|find|look for|search for|browse)\s+(?:for\s+)?(.+)',
+        r'(?:search|google|look up|find|look for|search for|browse|serach|seach)\s+(?:for\s+)?(.+)',
         r'(?:what is|what are|who is|how to|why does|when did)\s+(.+)',
     ]
     for pattern in patterns:
@@ -120,6 +109,8 @@ def extract_query(text: str) -> Optional[str]:
             query = match.group(1).strip()
             # Clean trailing noise
             query = re.sub(r'\b(on google|on the web|online|on safari|on chrome)\b', '', query).strip()
+            # Clean leading noise words like "the file", "a document", "my"
+            query = re.sub(r'^(?:the\s+)?(?:file|document|folder|a\s+file|my\s+file|my)\s+(?:named?|called)?\s*', '', query, flags=re.IGNORECASE).strip()
             if query:
                 return query
 
@@ -232,9 +223,9 @@ def extract_filename(text: str) -> dict:
     bare_patterns = [
         r'(?:called|named)\s+(\S+)',                                   # "file called ideas"
         r'(?:contents?\s+(?:of|in|from))\s+(?:the\s+)?(\w+)',         # "contents of superman", "contents in resume"
-        r'(?:create|make|delete|read|open|copy)\s+(?:a\s+)?(?:my\s+)?(?:file\s+)?(?:called\s+|named\s+)?(\w+)(?:\s+file)?',  # "create superman file", "read my notes"
+        r'(?:create|make|delete|read|open|copy|search|find|look)\s+(?:a\s+)?(?:my\s+)?(?:file\s+)?(?:called\s+|named\s+)?(\w+)(?:\s+file)?',  # "create superman file", "search my notes"
         r'(?:create|make)\s+(\w+)\s+(?:file|document|note)',           # "create superman file"
-        r'(?:create|make|read|delete|open|copy)\s+(?:a\s+)?(\w+)$',   # "create ideas" / "read notes" (at end)
+        r'(?:create|make|read|delete|open|copy|search|find)\s+(?:a\s+)?(\w+)$',   # "create ideas" / "find notes" (at end)
     ]
     for pattern in bare_patterns:
         match = re.search(pattern, text)
@@ -325,22 +316,18 @@ def extract_file_edit_params(text: str) -> dict:
             result["content"] = content
             return result
 
-    # Pattern 3: "write/add <content> in/to <filename>"
-    match_content_first = re.search(
-        r'(?:write|add|append|put|type|insert)\s+(.+?)\s+'
-        r'(?:in|inside|to|into|on)\s+(?:that\s+|the\s+)?'
-        r'(?:particular\s+)?(?:file\s+)?(?:name[d]?\s+|called\s+)?'
-        r'([\w\.]+)\s*$', text)
-    if match_content_first:
-        content = match_content_first.group(1).strip()
-        fname = match_content_first.group(2).strip()
-        if content and fname not in {"the", "a", "that", "this", "my", "file", "document",
-                                       "note", "it", "particular", "now", "just", "right",
-                                       "here", "there", "please", "first", "last", "one",
-                                       "create", "make", "delete", "read", "open", "copy", "write", "add"}:
+    # Pattern 3b: "add/write X to that file WITH <content>"
+    # Handles: "add content to that file with hi this is testing"
+    with_match = re.search(
+        r'(?:write|add|append|put|type|insert)\s+.+?'
+        r'(?:in|inside|to|into|on)\s+(?:that|the|a|this|my)\s+'
+        r'(?:particular\s+)?(?:file|document|note)\s+'
+        r'(?:with|saying|containing)\s+(.+)',
+        text, re.IGNORECASE)
+    if with_match:
+        content = with_match.group(1).strip()
+        if content and not _is_meta_content(content):
             result["content"] = content
-            if not result["filename"]:
-                result["filename"] = fname
             return result
 
     # Pattern 4: Generic "write/add <content>" (filename from context)
@@ -357,11 +344,13 @@ def extract_file_edit_params(text: str) -> dict:
                 rf'(?:name|named|called)?\s*{fname}.*$',
                 '', content, flags=re.IGNORECASE).strip()
 
-        # Clean generic references
+        # Clean generic file references — but STOP at content-introducing words
+        # "content to that file with hi" → keep "hi" after "with"
         content = re.sub(
             r'\s*(?:in|inside|to|into|on)\s+(?:that|the|a|this)\s+'
-            r'(?:particular\s+)?(?:file|document|note).*$',
-            '', content, flags=re.IGNORECASE).strip()
+            r'(?:particular\s+)?(?:file|document|note)'
+            r'(?:\s+(?:with|saying|containing)\s+)?',
+            ' ', content, flags=re.IGNORECASE).strip()
         content = re.sub(
             r'\s*(?:in|inside|to|into|on)\s+(?:it|that|this)(?:\s+file)?$',
             '', content, flags=re.IGNORECASE).strip()
@@ -530,52 +519,30 @@ def is_compound_file_command(text: str) -> bool:
 def is_find_and_send_command(text: str) -> bool:
     """
     Quick check: does this command contain find/search AND send to email?
-    Or is it a direct send with an attachment? ("sent abc.txt to ...")
     """
-    # Pattern 1: Explicit find/search + send
     has_find = bool(re.search(r'\b(?:find|search|get|look for)\b', text))
-    has_send = bool(re.search(r'\b(?:send|sent|email)\b', text))
+    has_send = bool(re.search(r'\b(?:send|email)\b', text))
     has_join = bool(re.search(r'\b(?:and|then|to)\b', text))
-    if has_find and has_send and has_join:
-        return True
-
-    # Pattern 2: Direct send with a filename
-    # e.g., "sent abc.txt to jithinpr888@gmail.com"
-    if re.search(r'\b(?:send|sent|email)\s+.*?\.\w{1,5}\s+(?:to)\b', text, re.IGNORECASE):
-        return True
-
-    return False
+    return has_find and has_send and has_join
 
 def extract_find_and_send_params(text: str) -> dict:
     """
-    Extracts filename and email from "find X and send it to Y" or "send X to Y"
+    Extracts filename and email from "find X and send it to Y"
     """
     result = {"filename": None, "to": None}
     
-    # Pattern 1: Direct "send/sent X to Y"
-    m = re.search(r'\b(?:send|sent|email)\s+(.*?)\s+(?:to)\s+(.*)', text, re.IGNORECASE)
-    if m:
-        file_part = m.group(1).strip()
-        to_part = m.group(2).strip()
-        
-        # Make sure file_part isn't just an email parameter like "an email"
-        if "." in file_part or "file" in file_part.lower():
-            file_info = extract_filename(file_part)
-            result["filename"] = file_info.get("filename") or file_part
-            
-            email_info = extract_email_params("send to " + to_part)
-            result["to"] = email_info.get("to") or to_part
-            return result
-    
-    # Pattern 2: "find X and send to Y"
+    # Try splitting into find part and send part
     split_match = re.split(r'\b(?:and\s+)?(?:then\s+)?(?:send|email)\b', text, maxsplit=1)
     if len(split_match) == 2:
         find_part = split_match[0].strip()
         send_part = split_match[1].strip()
         
+        # 1. Get filename from find_part
         file_info = extract_filename(find_part)
+        # If extract_filename failed, fallback to extract_query
         result["filename"] = file_info.get("filename") or extract_query(find_part)
         
+        # 2. Get email from send_part
         email_info = extract_email_params("send " + send_part)
         result["to"] = email_info.get("to")
         

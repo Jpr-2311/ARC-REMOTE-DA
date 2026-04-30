@@ -1,7 +1,7 @@
 import sys
 
 if sys.platform == "darwin":
-    from control.mac.open_apps import open_vscode, open_safari, open_terminal, open_any_app, open_spotify
+    from control.mac.open_apps import open_vscode, open_safari, open_terminal, open_any_app
     from control.mac.system_actions import lock_screen, shutdown_pc, restart_pc, sleep_mac
     from control.mac.system_controls import (
         volume_up, volume_down, mute, unmute, get_volume,
@@ -22,7 +22,7 @@ if sys.platform == "darwin":
 elif sys.platform == "win32":
     from control.windows.open_apps import (
         open_vscode, open_safari, open_terminal, open_any_app,
-        open_cmd, open_powershell, open_windows_terminal, open_spotify
+        open_cmd, open_powershell, open_windows_terminal,
     )
     from control.windows.system_actions import lock_screen, shutdown_pc, restart_pc, sleep_mac
     from control.windows.system_controls import (

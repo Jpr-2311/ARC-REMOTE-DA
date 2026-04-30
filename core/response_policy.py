@@ -543,7 +543,7 @@ def format_for_source(response, source: str) -> str:
     Returns:
         A string appropriate for the channel.
     """
-    if source != "voice":
+    if source == "api":
         import json
         return json.dumps(response.to_dict(), indent=2)
 

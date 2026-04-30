@@ -37,56 +37,23 @@ def unmute() -> None:
 def get_volume() -> None:
     speak("Volume control on Windows.")
 
-def brightness_up(amount: int = 10) -> None:
-    import ctypes, subprocess
-    # Read current brightness, add amount, clamp to 0-100
-    try:
-        cur = subprocess.run(
-            ["powershell", "-c",
-             "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness"],
-            capture_output=True, text=True, timeout=3
-        )
-        current = int(cur.stdout.strip()) if cur.stdout.strip().isdigit() else 50
-    except Exception:
-        current = 50
-    new_val = min(100, current + amount)
+def brightness_up() -> None:
     subprocess.Popen(["powershell", "-c",
-        f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{new_val})"])
-    print(f"Brightness: {current} -> {new_val}%")
-    return f"Brightness increased to {new_val}%"
+        "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,80)"])
+    print("☀️ Brightness up")
 
-def brightness_down(amount: int = 10) -> None:
-    import subprocess
-    try:
-        cur = subprocess.run(
-            ["powershell", "-c",
-             "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness"],
-            capture_output=True, text=True, timeout=3
-        )
-        current = int(cur.stdout.strip()) if cur.stdout.strip().isdigit() else 50
-    except Exception:
-        current = 50
-    new_val = max(0, current - amount)
+def brightness_down() -> None:
     subprocess.Popen(["powershell", "-c",
-        f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{new_val})"])
-    print(f"Brightness: {current} -> {new_val}%")
-    return f"Brightness decreased to {new_val}%"
+        "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,40)"])
+    print("🌑 Brightness down")
 
-def take_screenshot() -> str:
+def take_screenshot() -> None:
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = os.path.expanduser(f"~/Desktop/screenshot_{timestamp}.png")
     subprocess.Popen(["powershell", "-c",
-        f"Add-Type -AssemblyName System.Windows.Forms; "
-        f"Add-Type -AssemblyName System.Drawing; "
-        f"$bmp = [System.Drawing.Bitmap]::new([System.Windows.Forms.SystemInformation]::VirtualScreen.Width, "
-        f"[System.Windows.Forms.SystemInformation]::VirtualScreen.Height); "
-        f"$g = [System.Drawing.Graphics]::FromImage($bmp); "
-        f"$g.CopyFromScreen([System.Windows.Forms.SystemInformation]::VirtualScreen.Location, "
-        f"[System.Drawing.Point]::Empty, [System.Windows.Forms.SystemInformation]::VirtualScreen.Size); "
-        f"$bmp.Save('{path}')"])
-    print(f"Screenshot saved: {path}")
-    return f"Screenshot saved: {path}"
+        f"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | Out-Null; $bitmap = [System.Drawing.Bitmap]::new([System.Windows.Forms.SystemInformation]::VirtualScreen.Width, [System.Windows.Forms.SystemInformation]::VirtualScreen.Height); $graphics = [System.Drawing.Graphics]::FromImage($bitmap); $graphics.CopyFromScreen([System.Windows.Forms.SystemInformation]::VirtualScreen.Location, [System.Drawing.Point]::Empty, [System.Windows.Forms.SystemInformation]::VirtualScreen.Size); $bitmap.Save('{path}')"])
+    print(f"📸 Screenshot saved: {path}")
 
 def minimise_all() -> None:
     subprocess.Popen(["powershell", "-c",
@@ -156,7 +123,7 @@ def switch_to_app(app_name: str) -> None:
     except Exception as e:
         print(f"❌ Could not switch: {e}")
 
-def get_battery() -> str:
+def get_battery() -> None:
     result = subprocess.run(
         ["powershell", "-c", "Get-WmiObject Win32_Battery | Select-Object EstimatedChargeRemaining"],
         capture_output=True, text=True
@@ -165,11 +132,9 @@ def get_battery() -> str:
     if match:
         percent = match.group()
         speak(f"Battery is at {percent} percent.")
-        print(f"Battery: {percent}%")
-        return f"Battery is at {percent}%"
+        print(f"🔋 Battery: {percent}%")
     else:
         speak("Couldn't read battery level.")
-        return "Battery level unavailable"
 
 def start_work_day() -> None:
     speak("Starting your work day.")

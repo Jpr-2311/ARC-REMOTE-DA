@@ -60,7 +60,7 @@ async function request(method, path, body = null) {
 export async function sendCommand(text) {
   return request('POST', CONFIG.ENDPOINTS.COMMAND, {
     text,
-    source: 'remote',
+    source: 'controller',
     user: 'user',
   });
 }
@@ -127,4 +127,12 @@ export async function checkHealth() {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * GET /suggestions — Fetch dynamic command suggestions from the backend.
+ * @returns {Promise<{suggestions: Array<{cmd: string, icon: string, label: string}>}>}
+ */
+export async function fetchSuggestions() {
+  return request('GET', '/suggestions');
 }

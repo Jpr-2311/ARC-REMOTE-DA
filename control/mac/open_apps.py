@@ -12,9 +12,6 @@ def open_terminal():
     
 def open_settings():
     subprocess.Popen(["open", "-a", "System Preferences"])
-
-def open_spotify():
-    subprocess.Popen(["open", "-a", "Spotify"])
     
 def open_any_app(app_name: str) -> None:
     """Opens any app by name — Mac finds it automatically."""
@@ -33,7 +30,5 @@ def open_any_app(app_name: str) -> None:
     if result.returncode != 0:
         print(f"❌ Couldn't find app: {app_name}")
         speak(f"Couldn't find {app_name} on your Mac.")
-        return False
     else:
         print(f"✅ Opened: {app_name}")
-        return True

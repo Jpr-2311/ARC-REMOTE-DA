@@ -45,7 +45,7 @@ from core.llm_brain import ask_gemini
 from core.reinforcement import track_action, boost_confidence, get_penalty, get_boost
 from core.thinking_ui import update_thinking
 from core.interrupt_manager import is_interrupt, get_interrupt_manager
-from core.confidence import evaluate_confidence
+from core.confidence import evaluate_confidence, ConfidenceTier
 from core.brain import get_brain, BrainDecision
 from core.working_memory import get_working_memory
 from core.continuous_memory import get_continuous_memory
@@ -64,18 +64,102 @@ from core.task_state import (
 from core.ambiguity_resolver import build_single_slot_question
 from core.instant_responses import get_instant_response, get_confirmation_prompt
 
+def _is_headless_source(source: str) -> bool:
+    """
+    Treat every non-voice caller as a remote/headless controller.
+    """
+    return (source or "").lower() != "voice"
+
+
+REMOTE_DETERMINISTIC_ACTIONS = {
+    "open_app", "close_app", "switch_to_app", "minimise_app",
+    "open_folder", "create_folder", "search_file", "search_google", "open_url",
+    "send_email", "search_emails", "tell_time", "tell_date", "read_news",
+    "get_battery", "tell_weather", "volume_up", "volume_down",
+    "brightness_up", "brightness_down", "mute", "unmute",
+    "sleep_mac", "lock_screen", "take_screenshot",
+}
+
 def ask_user_input(prompt: str, source: str, request_id: str, event_type: str = "clarify") -> str:
-    if source != "voice":
+    if _is_headless_source(source):
         try:
             from remote.job_store import ask_user
             return ask_user(request_id, prompt, event_type)
         except Exception as e:
-            print(f"Warning: api ask_user failed: {e}")
+            print(f"Warning: headless ask_user failed: {e}")
             return ""
     else:
         speak_result(prompt)
         res = stt_listen()
         return res if res else ""
+
+
+def _apply_slot_reply(params: dict, action: str, slot: str, reply: str) -> dict:
+    """Fill the clarified slot without re-routing the reply as a brand-new command."""
+    updated = dict(params or {})
+    value = (reply or "").strip()
+    if not value:
+        return updated
+
+    updated[slot] = value
+
+    if slot == "target":
+        updated.setdefault("name", value)
+    elif slot == "name":
+        updated.setdefault("target", value)
+
+    if action == "search_file" and slot in {"target", "filename", "query"}:
+        updated["query"] = value
+    elif action == "send_email" and slot in {"target", "recipient", "to"}:
+        updated["to"] = value
+
+    return updated
+
+
+def _store_command_response(
+    request_id: str,
+    source: str,
+    action: str,
+    params: dict,
+    result: ActionResult,
+    spoken_text: str,
+    start_time: float,
+    ack_text: str = "",
+) -> None:
+    """Store one structured response for API/remote controllers."""
+    try:
+        from core.command_models import CommandResponse, ExecutionStatus
+        from core.runtime import store_result
+
+        data = dict(result.data or {})
+        data.setdefault("params", dict(params or {}))
+        if ack_text:
+            data.setdefault("ack", ack_text)
+
+        store_result(CommandResponse(
+            request_id=request_id,
+            status=ExecutionStatus.COMPLETED if result.success else ExecutionStatus.FAILED,
+            interpreted_action=action,
+            final_result=spoken_text,
+            steps=[result.to_step_result()],
+            data=data,
+            errors=[spoken_text] if not result.success else [],
+            elapsed_ms=(time.time() - start_time) * 1000,
+            source=source,
+        ))
+    except Exception:
+        pass
+
+
+def _remote_confidence_floor(action: str, params: dict, missing_params: list) -> float:
+    """Minimum confidence for deterministic remote actions that have usable params."""
+    if action not in REMOTE_DETERMINISTIC_ACTIONS or missing_params:
+        return 0.0
+    if action in DESTRUCTIVE_ACTIONS:
+        return 0.65
+    if action in {"search_file", "send_email", "search_google", "open_url", "open_app"}:
+        return 0.62
+    return 0.60
 
 # ── Format Keywords → Extensions ───────────────────────────────
 FORMAT_MAP = {
@@ -342,7 +426,18 @@ def _extract_params(action: str, text: str) -> dict:
             params["target"] = target
 
     elif action == "search_file":
-        query = extract_query(text)
+        file_params = extract_filename(text)
+        query = file_params.get("filename") or extract_query(text)
+        if not query:
+            # Last resort: strip common filler words and grab the last meaningful word
+            import re as _re
+            _noise = {"a", "an", "the", "my", "file", "find", "search", "for", "in",
+                       "on", "this", "that", "laptop", "computer", "mac", "desktop",
+                       "nono", "please", "can", "you", "i", "want", "to", "look",
+                       "serach", "seach", "it", "me", "some"}
+            words = [w for w in _re.findall(r'\w+', text.lower()) if w not in _noise and len(w) > 1]
+            if words:
+                query = words[-1]  # Use the last significant word
         if query:
             params["query"] = query
 
@@ -359,9 +454,29 @@ def _extract_params(action: str, text: str) -> dict:
 
     elif action == "edit_file":
         params.update(extract_file_edit_params(text))
+        # ── Gemini fallback when regex can't extract content ──
+        if not params.get("content"):
+            gemini_params = _gemini_extract_file_params(text)
+            if gemini_params:
+                if gemini_params.get("content"):
+                    params["content"] = gemini_params["content"]
+                    print(f"🤖 Gemini extracted content: '{params['content']}'")
+                if gemini_params.get("filename") and not params.get("filename"):
+                    params["filename"] = gemini_params["filename"]
+                    print(f"🤖 Gemini extracted filename: '{params['filename']}'")
+                if gemini_params.get("location") and not params.get("location"):
+                    params["location"] = gemini_params["location"]
 
     elif action == "create_and_edit_file":
         params.update(extract_compound_file_params(text))
+        # ── Gemini fallback for compound create+edit ─────────
+        if not params.get("content"):
+            gemini_params = _gemini_extract_file_params(text)
+            if gemini_params:
+                if gemini_params.get("content"):
+                    params["content"] = gemini_params["content"]
+                if gemini_params.get("filename") and not params.get("filename"):
+                    params["filename"] = gemini_params["filename"]
 
     # Auto-fill missing filename from file context cache
     if action in ("edit_file", "read_file", "delete_file", "rename_file", "copy_file"):
@@ -390,6 +505,49 @@ def _get_music_agent():
         from core.agents.music_agent import MusicAgent
         return MusicAgent()
     except Exception:
+        return None
+
+
+# ── Gemini-Powered File Param Extraction ─────────────────────
+def _gemini_extract_file_params(text: str) -> dict:
+    """
+    Uses Gemini to extract filename, content, and location from a
+    natural language file command. Only called when regex fails.
+    Returns dict with 'filename', 'content', 'location' or None on error.
+    """
+    try:
+        import json
+        from google import genai
+        client = genai.Client(api_key=os.getenv("API_KEY"))
+
+        prompt = f"""Extract file operation parameters from this command.
+Return ONLY a JSON object with these keys (use null if not found):
+
+- "filename": the target filename (e.g. "notes.txt", "superman.txt")
+- "content": the actual text content to write/add (NOT meta-words like "content", "text", "stuff")
+- "location": where the file is ("desktop", "downloads", "documents", or null)
+
+Examples:
+- "add content to that file with hi this is testing" → {{"filename": null, "content": "hi this is testing", "location": null}}
+- "write hello world in notes.txt" → {{"filename": "notes.txt", "content": "hello world", "location": null}}
+- "add some text to superman.txt saying I am the best" → {{"filename": "superman.txt", "content": "I am the best", "location": null}}
+- "put stuff in the file" → {{"filename": null, "content": null, "location": null}}
+- "write in create.txt on desktop the message welcome home" → {{"filename": "create.txt", "content": "welcome home", "location": "desktop"}}
+
+Command: "{text}"
+
+Return ONLY JSON, nothing else."""
+
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-lite-preview",
+            contents=prompt
+        )
+        raw = response.text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(raw)
+        print(f"🤖 Gemini file params: {data}")
+        return data
+    except Exception as e:
+        print(f"⚠️  Gemini file param extraction failed: {e}")
         return None
 
 
@@ -432,15 +590,9 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
             func_name = f"open_{target.lower().replace(' ', '_')}"
             if func_name in actions:
                 actions[func_name]()
-                success = True
             else:
                 from control import open_any_app
-                # Handle boolean return if platform supports it
-                res = open_any_app(target)
-                success = res if res is not None else True
-
-            if not success:
-                return ActionResult.fail(action, f"Could not find app '{target}'", data={"target": target})
+                open_any_app(target)
 
             # ── Auto-play focus music for productive apps ────
             PRODUCTIVE_APPS = {"vscode", "terminal", "xcode", "sublime", "pycharm", "intellij"}
@@ -483,18 +635,23 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
                 actions["volume_down"](amount)
                 return ActionResult.ok(action, f"Volume down by {amount}", data={"amount": amount})
 
-        # ── Brightness ──────────────────────────────────────
         if action == "brightness_up":
-            amount = params.get("amount", 10)
+            amount = params.get("amount") or 10
             if "brightness_up" in actions:
-                actions["brightness_up"](amount)
-                return ActionResult.ok(action, f"Brightness up by {amount}%", data={"amount": amount})
+                steps = max(1, min(16, round(float(amount) / 10)))
+                for _ in range(steps):
+                    actions["brightness_up"]()
+                message = f"Brightness up by {amount}"
+                return ActionResult.ok(action, message, data={"amount": amount}, user_message=f"{message}.")
 
         if action == "brightness_down":
-            amount = params.get("amount", 10)
+            amount = params.get("amount") or 10
             if "brightness_down" in actions:
-                actions["brightness_down"](amount)
-                return ActionResult.ok(action, f"Brightness down by {amount}%", data={"amount": amount})
+                steps = max(1, min(16, round(float(amount) / 10)))
+                for _ in range(steps):
+                    actions["brightness_down"]()
+                message = f"Brightness down by {amount}"
+                return ActionResult.ok(action, message, data={"amount": amount}, user_message=f"{message}.")
 
         # ── Search Google ───────────────────────────────────
         if action == "search_google":
@@ -529,11 +686,18 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
 
         if action == "search_file":
             query = params.get("query", "")
+            if not query:
+                # No filename extracted — ask the user
+                return ActionResult.fail(
+                    action, "No filename specified",
+                    user_message="What file are you looking for? Tell me the name."
+                )
             if query and "search_files_advanced" in actions:
                 best_match = actions["search_files_advanced"](query)
                 if best_match:
-                    return ActionResult.ok(action, f"Found file: {os.path.basename(best_match)}", data={"filename": best_match})
-                return ActionResult.fail(action, f"Could not find a file matching '{query}'", data={"query": query})
+                    return ActionResult.ok(action, f"Found file: {os.path.basename(best_match)}", data={"filename": best_match, "path": best_match})
+                return ActionResult.fail(action, f"Could not find a file matching '{query}'", data={"query": query},
+                                         user_message=f"I couldn't find any file matching '{query}' on your Desktop, Documents, or Downloads.")
             # fallback to old search
             elif query and "search_file" in actions:
                 actions["search_file"](query)
@@ -548,14 +712,37 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
 
         if action == "send_email":
             if "send_email" in actions:
-                actions["send_email"](
+                result_text = actions["send_email"](
                     params.get("to", ""),
                     params.get("subject", ""),
                     params.get("body", ""),
                     _source=_source,
                     _request_id=_request_id
                 )
-                return ActionResult.ok(action, "Email composed")
+                result_text = (result_text or "Email composed").strip()
+                if result_text.lower().startswith("cancelled"):
+                    return ActionResult.fail(action, result_text, user_message=result_text)
+                if result_text.lower().startswith("failed"):
+                    return ActionResult.fail(action, result_text, user_message=result_text)
+                return ActionResult.ok(action, result_text, user_message=result_text)
+
+        if action == "tell_time":
+            if "tell_time" in actions:
+                result = actions["tell_time"]()
+                message = (result or "I checked the time.").strip()
+                return ActionResult.ok(action, message, data={"time": message}, user_message=message)
+
+        if action == "tell_date":
+            if "tell_date" in actions:
+                result = actions["tell_date"]()
+                message = (result or "I checked the date.").strip()
+                return ActionResult.ok(action, message, data={"date": message}, user_message=message)
+
+        if action == "read_news":
+            if "read_news" in actions:
+                result = actions["read_news"]()
+                message = (result or "I checked the news.").strip()
+                return ActionResult.ok(action, message, data={"news": message}, user_message=message)
 
         # ── File operations ─────────────────────────────────
         if action == "read_file":
@@ -756,18 +943,23 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
                 response_text = result.get("response", "I'm not sure about that.")
                 return ActionResult.ok(action, response_text, user_message=response_text)
             except Exception as e:
-                return ActionResult.fail(action, str(e), user_message="My brain is a bit slow right now.")
+                fallback = "I'm ARC — I can help control this laptop. Ask me to open apps, find files, or send emails."
+                return ActionResult.ok(action, fallback, user_message=fallback)
 
         # ── Generic action ──────────────────────────────────
         if action in actions:
             result = actions[action]()
-            # Use the return value as the human-readable summary if it's a string
-            if result and isinstance(result, str):
-                summary = result
-            else:
-                summary = f"Executed {action}" + (f": {result}" if result else "")
-            result_data = {"result": str(result)} if result is not None else {}
-            return ActionResult.ok(action, summary, data=result_data)
+            if isinstance(result, str) and result.strip():
+                message = result.strip()
+                direct_answer_actions = {"tell_time", "tell_date", "tell_weather", "get_battery"}
+                return ActionResult.ok(
+                    action,
+                    message,
+                    user_message=message if action in direct_answer_actions else "",
+                )
+
+            summary = f"Executed {action}" + (f": {result}" if result else "")
+            return ActionResult.ok(action, summary)
 
         return ActionResult.fail(action, f"Unknown action: {action}")
 
@@ -976,12 +1168,31 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
                     resumed.get("confidence", 0.8),
                     has_context_reference=False,
                     word_count=len(command.split()),
-                    source=_source
                 )
                 if safety.decision == SafetyDecision.CONFIRM:
                     prompt = get_confirmation(action, params)
-                    confirmed = ask_voice_confirmation(prompt)
+                    if _is_headless_source(_source):
+                        confirmed_resp = ask_user_input(prompt, _source, _request_id, event_type="confirm")
+                        confirmed = confirmed_resp.strip().lower() in ("yes", "y", "confirm", "ok", "sure", "do it")
+                    else:
+                        confirmed = ask_voice_confirmation(prompt)
                     if not confirmed:
+                        if _is_headless_source(_source):
+                            try:
+                                from core.command_models import CommandResponse, ExecutionStatus
+                                from core.runtime import store_result
+
+                                store_result(CommandResponse(
+                                    request_id=_request_id,
+                                    status=ExecutionStatus.CANCELLED,
+                                    interpreted_action=action,
+                                    final_result="Cancelled by user.",
+                                    elapsed_ms=(time.time() - start_time) * 1000,
+                                    source=_source,
+                                    data={"params": dict(params or {})},
+                                ))
+                            except Exception:
+                                pass
                         latency_ms = (time.time() - start_time) * 1000
                         log_interaction(
                             you_said=command, action_taken=f"{action}_cancelled",
@@ -1210,6 +1421,19 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
         has_context_ref=has_ctx,
         context_resolved=was_resolved if has_ctx else False,
     )
+    missing_params = get_missing_params(intent.action, params)
+    if _is_headless_source(_source):
+        confidence_floor = _remote_confidence_floor(intent.action, params, missing_params)
+        if confidence_floor and conf_result.score < confidence_floor:
+            conf_result.score = confidence_floor
+            conf_result.tier = (
+                ConfidenceTier.HIGH if confidence_floor > 0.8 else ConfidenceTier.MEDIUM
+            )
+            conf_result.should_execute = True
+            conf_result.should_confirm = intent.action in DESTRUCTIVE_ACTIONS
+            conf_result.recommendation = (
+                f"Remote deterministic action ({confidence_floor:.2f}) — using local executor."
+            )
     print(f"🎯 Confidence: {conf_result.score:.2f} ({conf_result.tier.value}) — {conf_result.recommendation}")
     update_thinking(command=command, intent=intent.action, confidence=conf_result.score, stage="Confidence")
 
@@ -1226,14 +1450,17 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
     )
 
     if decision_result.decision == BrainDecision.PLAN_AND_EXECUTE:
-        print("🤖 ManagerBrain: Complex command detected — routing to ManagerAgent")
-        update_thinking(command=command, stage="Planning Task Graph")
-        if brain._manager:
-            brain._manager.run(command)
+        if _is_headless_source(_source):
+            print("🤖 ManagerBrain: headless source detected — using deterministic action path")
         else:
-            print("⚠️ ManagerAgent not available — falling back to old logic")
-            # Let it fall through to execution if no manager
-        return True
+            print("🤖 ManagerBrain: Complex command detected — routing to ManagerAgent")
+            update_thinking(command=command, stage="Planning Task Graph")
+            if brain._manager:
+                brain._manager.run(command)
+            else:
+                print("⚠️ ManagerAgent not available — falling back to old logic")
+                # Let it fall through to execution if no manager
+            return True
 
     elif decision_result.decision == BrainDecision.CHAT:
         print("💬 ManagerBrain: Conversational input detected")
@@ -1241,7 +1468,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
         conf_result.score = 0.0  
 
     # ── Step 6: Safety check ─────────────────────────────────
-    safety = check_safety(intent.action, conf_result.score, has_ctx, word_count=len(cleaned.split()), source=_source)
+    safety = check_safety(intent.action, conf_result.score, has_ctx, word_count=len(cleaned.split()))
     missing_params = get_missing_params(intent.action, params)
     if missing_params and safety.decision in {SafetyDecision.EXECUTE, SafetyDecision.CONFIRM}:
         safety = SafetyDecision(
@@ -1376,7 +1603,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
 
         # ── Background Gemini: gated, only for interesting successes ─
         result_str = result.summary if result.success else f"Error: {result.error}"
-        if should_enhance(intent.action, result_str):
+        if not _is_headless_source(_source) and should_enhance(intent.action, result_str):
             generate_followup(
                 action=intent.action,
                 command=command,
@@ -1390,7 +1617,7 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
     elif safety.decision == SafetyDecision.CONFIRM:
         # Use response_policy for confirmation prompt
         prompt = get_confirmation(intent.action, params)
-        if _source != "voice":
+        if _is_headless_source(_source):
             confirmed_resp = ask_user_input(prompt, _source, _request_id, event_type="confirm")
             confirmed = confirmed_resp.strip().lower() in ("yes", "y", "confirm", "ok", "sure", "do it")
         else:
@@ -1511,11 +1738,62 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
             question = get_clarification(intent.action, params)
             missing_param = missing_params[0] if missing_params else "target"
 
-        if _source != "voice":
+        if _is_headless_source(_source):
             resp = ask_user_input(question, _source, _request_id, event_type="clarify")
             if resp:
-                from core.runtime import store_result
-                return route(f"{command} {resp}", actions, _source=_source, _request_id=_request_id)
+                params = _apply_slot_reply(params, intent.action, missing_param or "target", resp)
+
+                for _ in range(5):
+                    remaining = get_missing_params(intent.action, params)
+                    if not remaining:
+                        break
+                    next_question, next_param = build_single_slot_question(
+                        intent.action, params, remaining
+                    )
+                    if not next_question:
+                        next_question = get_clarification(intent.action, params)
+                        next_param = remaining[0]
+                    next_resp = ask_user_input(next_question, _source, _request_id, event_type="clarify")
+                    if not next_resp:
+                        from core.command_models import CommandResponse
+                        from core.runtime import store_result
+                        store_result(CommandResponse.fail(_request_id, intent.action, "Clarification cancelled.", source=_source))
+                        return True
+                    params = _apply_slot_reply(params, intent.action, next_param or "target", next_resp)
+
+                ack_text = get_ack(intent.action)
+                if ack_text:
+                    speak_ack(ack_text)
+
+                before_state = _capture_before_state(intent.action, params)
+                result = _execute_action(intent.action, params, actions, text=cleaned, _source=_source, _request_id=_request_id)
+                result = _verify_action_result(intent.action, params, result, before_state, actions=actions, text=cleaned)
+                spoken_text = get_result_text(result)
+                if intent.action not in {"volume_up", "volume_down", "brightness_up", "brightness_down"}:
+                    speak_result(spoken_text)
+
+                update_context(
+                    action=intent.action,
+                    target=params.get("target", params.get("name", params.get("query", ""))),
+                    result=result.summary,
+                    command=cleaned,
+                )
+
+                latency_ms = (time.time() - start_time) * 1000
+                full_spoken = f"{ack_text} {spoken_text}".strip() if ack_text else spoken_text
+                log_interaction(
+                    you_said=command, action_taken=intent.action,
+                    was_understood=True, intent_source=intent.source,
+                    confidence=intent.confidence, latency_ms=latency_ms,
+                    normalized_text=cleaned, params=params,
+                    spoken_text=full_spoken,
+                )
+                save_exchange(command, full_spoken)
+                _store_command_response(
+                    _request_id, _source, intent.action, params,
+                    result, spoken_text, start_time, ack_text,
+                )
+                return True
             else:
                 from core.runtime import store_result
                 from core.command_models import CommandResponse
@@ -1555,9 +1833,58 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
 
     # ── DECISION: GEMINI FALLBACK ────────────────────────────
     elif safety.decision == SafetyDecision.GEMINI:
-        if _source != "voice":
-            # Remote/API mode should never hard-depend on voice/Gemini loops.
-            # Fail closed with a clear message so the controller can rephrase.
+        if _is_headless_source(_source):
+            # Try Gemini for all headless commands — chat, questions, and ambiguous intents
+            try:
+                gemini_result = ask_gemini(command)
+                gemini_type = gemini_result.get("type", "chat")
+                gemini_action = gemini_result.get("action")
+                gemini_response = gemini_result.get("response", "")
+
+                if gemini_type == "chat" or gemini_action in ("answer_question", "general_chat", None):
+                    # Conversational response — return as result
+                    response_text = gemini_response or "I'm not sure about that."
+                    result = ActionResult.ok(
+                        intent.action, response_text, user_message=response_text
+                    )
+                    _store_command_response(
+                        _request_id, _source, intent.action, params,
+                        result, response_text, start_time,
+                    )
+                    return True
+
+                elif gemini_type == "action" and gemini_action:
+                    # Gemini resolved an action — execute it
+                    ack_text = get_ack(gemini_action)
+                    merged_params = _merge_gemini_params(gemini_result, params)
+                    before_state = _capture_before_state(gemini_action, merged_params)
+                    exec_result = _execute_action(
+                        gemini_action, merged_params, actions,
+                        text=command, _source=_source, _request_id=_request_id,
+                    )
+                    exec_result = _verify_action_result(
+                        gemini_action, merged_params, exec_result,
+                        before_state, actions=actions, text=command,
+                    )
+                    spoken_text = get_result_text(exec_result)
+                    _store_command_response(
+                        _request_id, _source, gemini_action, merged_params,
+                        exec_result, spoken_text, start_time, ack_text or "",
+                    )
+                    # Learn from Gemini resolution
+                    if gemini_action not in ("answer_question", "chat_response"):
+                        learn(
+                            normalized_input=cleaned,
+                            action=gemini_action,
+                            params=merged_params,
+                            confidence=1.0,
+                            source="gemini",
+                        )
+                    return True
+            except Exception as e:
+                print(f"⚠️  Gemini fallback error for headless: {e}")
+
+            # Gemini failed — return a clear error
             msg = "I couldn't understand that well enough to act. Please rephrase."
             try:
                 from core.command_models import CommandResponse, ExecutionStatus
@@ -1587,21 +1914,25 @@ def _handle_compound_file(
     normalized_command: str,
     actions: dict,
     start_time: float,
+    _source: str = "voice",
+    _request_id: str = "",
 ) -> bool:
     """
     Handles compound create+write commands like:
     'create a file called notes.txt and write hello world in it'
     """
-    from core.speech_to_text import listen as stt_listen
-
     params = extract_compound_file_params(normalized_command)
     filename = params.get("filename", "")
     location = params.get("location") or "desktop"
     content  = params.get("content")
 
     if not filename:
-        speak_result("What do you want me to name the file?")
-        name_response = stt_listen()
+        name_response = ask_user_input(
+            "What do you want me to name the file?",
+            _source,
+            _request_id,
+            event_type="clarify",
+        )
         if name_response and name_response.strip():
             # Use param extractor to clean up user's response like "name it hello"
             from core.param_extractors import extract_filename
@@ -1621,8 +1952,12 @@ def _handle_compound_file(
             filename = filename + detected_fmt
             print(f"📄 Auto-detected format: {detected_fmt}")
         else:
-            speak_result(f"What format should {filename} be? Like text, document, python?")
-            fmt_response = stt_listen()
+            fmt_response = ask_user_input(
+                f"What format should {filename} be? Like text, document, python?",
+                _source,
+                _request_id,
+                event_type="clarify",
+            )
             if fmt_response:
                 ext = _resolve_format(fmt_response)
                 filename = filename + ext
@@ -1638,8 +1973,12 @@ def _handle_compound_file(
 
     # Step 2: Write content (or ask for it)
     if not content:
-        speak_result("What do you want me to write in it?")
-        content_response = stt_listen()
+        content_response = ask_user_input(
+            "What do you want me to write in it?",
+            _source,
+            _request_id,
+            event_type="clarify",
+        )
         if content_response and content_response.strip():
             # Check if user is rejecting / correcting
             response_lower = content_response.strip().lower()
@@ -1696,7 +2035,24 @@ def _handle_compound_file(
     )
     save_exchange(raw_command, spoken_text)
 
-    if should_enhance("create_file", result_summary):
+    if _is_headless_source(_source):
+        _store_command_response(
+            _request_id,
+            _source,
+            "create_and_edit_file",
+            {"filename": filename, "content": content, "location": location},
+            ActionResult.ok(
+                "create_and_edit_file",
+                result_summary,
+                data={"filename": filename, "content": content, "location": location},
+                user_message=spoken_text,
+            ),
+            spoken_text,
+            start_time,
+            "Creating and writing.",
+        )
+
+    if not _is_headless_source(_source) and should_enhance("create_file", result_summary):
         generate_followup(
             action="create_file",
             command=raw_command,

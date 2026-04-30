@@ -27,6 +27,9 @@ def speak(msg):
     """Proxy to voice_response.speak — lazy loaded."""
     _get_speak()(msg)
 
+def _is_headless_source(source: str) -> bool:
+    return (source or "").lower() != "voice"
+
 # ─── Settings ────────────────────────────────────────────────
 SCOPES           = ["https://www.googleapis.com/auth/gmail.modify"]
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
@@ -117,7 +120,7 @@ def _voice_input_with_retry(
     """
     Ask a voice question, listen for the answer, optionally confirm,
     and retry up to `max_retries` times if the input is empty or rejected.
-    If _source is "api", it uses headless job stream for input instead.
+    If _source is non-voice, it uses the headless job stream for input instead.
 
     Args:
         gemini_field: If set (e.g. 'subject', 'recipient'), uses Gemini
@@ -125,7 +128,7 @@ def _voice_input_with_retry(
 
     Returns the confirmed text, or "" if all retries exhausted.
     """
-    if _source != "voice" and _request_id:
+    if _is_headless_source(_source) and _request_id:
         from remote.job_store import ask_user
         # Headless mode: ask the client via job stream
         reply = ask_user(_request_id, prompt, event_type="clarify")
@@ -192,6 +195,45 @@ def _voice_input_with_retry(
     return ""
 
 
+# ─── Direct Gmail API Send ───────────────────────────────────
+
+def _send_via_gmail_api(to: str, subject: str, body: str) -> dict:
+    """
+    Sends an email directly via the Gmail API — no browser, no Playwright.
+    Uses the existing OAuth2 credentials (token.json).
+    
+    Returns:
+        {"sent": True, "message_id": "..."} on success
+        {"sent": False, "error": "..."} on failure
+    """
+    from email.mime.text import MIMEText
+
+    try:
+        service = get_gmail_service()
+        
+        # Construct the MIME message
+        message = MIMEText(body)
+        message["to"] = to
+        message["subject"] = subject
+        
+        # Encode to base64url
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        
+        # Send via API
+        sent = service.users().messages().send(
+            userId="me",
+            body={"raw": raw}
+        ).execute()
+        
+        msg_id = sent.get("id", "unknown")
+        print(f"📧 ✅ Email sent via Gmail API! Message ID: {msg_id}")
+        return {"sent": True, "message_id": msg_id}
+        
+    except Exception as e:
+        print(f"📧 ❌ Gmail API send error: {e}")
+        return {"sent": False, "error": str(e)}
+
+
 # ─── Gmail Service ───────────────────────────────────────────
 
 def get_gmail_service():
@@ -250,8 +292,8 @@ def _extract_body(payload: dict) -> str:
     return body
 
 
-def _speak_email(service, msg_id: str, read_body: bool = False) -> dict:
-    """Fetches, speaks and returns a single email as a dict."""
+def _speak_email(service, msg_id: str, read_body: bool = False) -> None:
+    """Fetches and speaks a single email."""
     data    = service.users().messages().get(
         userId="me", id=msg_id,
         format="full" if read_body else "metadata",
@@ -266,27 +308,23 @@ def _speak_email(service, msg_id: str, read_body: bool = False) -> dict:
     speak(f"From {sender_name}: {subject}.")
     print(f"📧 From: {sender_name} | Subject: {subject}")
 
-    result = {"from": sender_name, "subject": subject, "body_preview": None}
-
     if read_body:
         body = _extract_body(data["payload"])
         if body:
+            # Read first 300 chars — enough to get the gist
             preview = body[:300]
             if len(body) > 300:
                 preview += "..."
             speak(f"It says: {preview}")
             print(f"📄 Body preview: {preview[:100]}...")
-            result["body_preview"] = preview
         else:
             speak("Couldn't read the email body.")
-
-    return result
 
 
 # ─── Read / Search / Open ────────────────────────────────────
 
-def read_emails(count: int = 5) -> str:
-    """Reads latest unread email subjects aloud and returns a summary string."""
+def read_emails(count: int = 5) -> None:
+    """Reads latest unread email subjects aloud."""
     speak("Checking your inbox.")
     try:
         service  = get_gmail_service()
@@ -299,22 +337,15 @@ def read_emails(count: int = 5) -> str:
         messages = results.get("messages", [])
         if not messages:
             speak("You have no unread emails.")
-            return "No unread emails."
+            return
 
         speak(f"You have {len(messages)} unread emails.")
-        emails = []
         for msg in messages[:count]:
-            info = _speak_email(service, msg["id"], read_body=False)
-            emails.append(info)
-
-        # Build a human-readable summary for the frontend
-        subjects = ", ".join(f"\"{e['subject']}\" from {e['from']}" for e in emails)
-        return f"{len(emails)} unread email(s): {subjects}"
+            _speak_email(service, msg["id"], read_body=False)
 
     except Exception as e:
         print(f"❌ Email error: {e}")
         speak("Couldn't read emails right now.")
-        return f"Error reading emails: {e}"
 
 
 def search_emails(query: str) -> None:
@@ -362,7 +393,8 @@ def send_email(to: str = "", subject: str = "", body: str = "", _source: str = "
             _request_id=_request_id,
         )
         if not to:
-            if _source == "voice": speak("Cancelled. No recipient provided.")
+            if not _is_headless_source(_source):
+                speak("Cancelled. No recipient provided.")
             return "Cancelled — missing recipient"
 
     # ── Resolve contact name to email address ────────────────
@@ -380,7 +412,8 @@ def send_email(to: str = "", subject: str = "", body: str = "", _source: str = "
             _request_id=_request_id,
         )
         if not subject:
-            if _source == "voice": speak("Cancelled. No subject provided.")
+            if not _is_headless_source(_source):
+                speak("Cancelled. No subject provided.")
             return "Cancelled — missing subject"
 
     # Step 3: Body (use long listen for extended speech)
@@ -397,11 +430,12 @@ def send_email(to: str = "", subject: str = "", body: str = "", _source: str = "
             _request_id=_request_id,
         )
         if not body:
-            if _source == "voice": speak("Cancelled. No message provided.")
+            if not _is_headless_source(_source):
+                speak("Cancelled. No message provided.")
             return "Cancelled — missing body"
 
     # Step 4: Final confirmation
-    if _source != "voice":
+    if _is_headless_source(_source):
         from remote.job_store import ask_user
         reply = ask_user(_request_id, f"Ready to compose email to {to}, subject: '{subject}'. Should I open it?", event_type="confirm")
         confirmation = reply
@@ -413,9 +447,35 @@ def send_email(to: str = "", subject: str = "", body: str = "", _source: str = "
         word in confirmation.lower()
         for word in ["yes", "yeah", "yep", "sure", "do it", "send", "open", "go"]
     ):
-        if _source == "voice": speak("Opening Gmail to compose.")
+        if not _is_headless_source(_source):
+            speak("Sending the email now.")
 
-        # ── Proper URL construction — fixes Issue 1 ──────────
+        # ── Strategy 1: Gmail API direct send (no browser needed) ──
+        try:
+            result = _send_via_gmail_api(to, subject, body)
+            if result.get("sent"):
+                return f"Email sent to {to} with subject '{subject}'."
+        except Exception as e:
+            print(f"⚠️  Gmail API send failed ({e}), trying fallback...")
+
+        # ── Strategy 2: Playwright auto-send ─────────────────────
+        try:
+            res = draft_email_with_attachment(
+                to=to,
+                subject=subject,
+                body=body,
+                attachment_path=None,
+                announce=(not _is_headless_source(_source)),
+                auto_send=True,
+            )
+            if res.get("sent"):
+                return f"Email sent to {to} with subject '{subject}'."
+            elif res.get("draft_opened"):
+                return "Draft opened in Gmail — please click send manually."
+        except Exception as e:
+            print(f"⚠️  Playwright send failed ({e}), falling back to URL open.")
+
+        # ── Strategy 3: Fallback — open compose URL ──────────────
         params = urllib.parse.urlencode(
             {
                 "to":      _safe(to),
@@ -424,27 +484,15 @@ def send_email(to: str = "", subject: str = "", body: str = "", _source: str = "
             },
             quote_via=urllib.parse.quote,
         )
-
         url = f"https://mail.google.com/mail/?view=cm&fs=1&{params}"
-        print(f"📧 Gmail URL: {url[:120]}...")
+        print(f"📧 Gmail URL (fallback): {url[:120]}...")
         webbrowser.open(url)
-        if _source == "voice": speak("Sending email.")
-        
-        # Give browser time to open and load the compose window
-        time.sleep(3.5)
-        
-        # Auto-send using computer control shortcut (Ctrl+Enter)
-        try:
-            import sys
-            from control.computer_use import hotkey
-            if sys.platform == "darwin":
-                hotkey("command", "enter")
-            else:
-                hotkey("ctrl", "enter")
-            return "Email sent."
-        except Exception as e:
-            print(f"⚠️ Could not auto-send: {e}")
-            return "Draft opened in Gmail (auto-send failed)"
+        if not _is_headless_source(_source):
+            speak("Draft opened. Please click send manually.")
+        return "Draft opened in Gmail — auto-send was not available."
+
+    return "Cancelled — email draft not opened"
+
 from control.file_search import search_files_advanced_multiple
 from remote.job_store import ask_user, get_job_store, JobEvent
 
@@ -457,13 +505,14 @@ def find_and_send_file(filename: str = "", to: str = "", _source: str = "voice",
     matches = search_files_advanced_multiple(filename, top_k=5)
     
     if not matches:
-        if _source == "voice": speak(f"I couldn't find any file matching {filename}.")
+        if not _is_headless_source(_source):
+            speak(f"I couldn't find any file matching {filename}.")
         return f"Failed — could not find file matching '{filename}'"
 
     selected_file = matches[0]
 
     if len(matches) > 1:
-        if _source != "voice":
+        if _is_headless_source(_source):
             prompt = f"Found multiple matches for '{filename}'. Which one do you want to send?\n"
             for i, match in enumerate(matches):
                 prompt += f"{i+1}. {os.path.basename(match)}\n"
@@ -491,7 +540,8 @@ def find_and_send_file(filename: str = "", to: str = "", _source: str = "voice",
             _request_id=_request_id,
         )
         if not to:
-            if _source == "voice": speak("Cancelled. No recipient provided.")
+            if not _is_headless_source(_source):
+                speak("Cancelled. No recipient provided.")
             return "Cancelled — missing recipient"
 
     to = _resolve_contact(to)
@@ -500,7 +550,7 @@ def find_and_send_file(filename: str = "", to: str = "", _source: str = "voice",
     file_basename = os.path.basename(selected_file)
     confirm_msg = f"Ready to open Gmail draft to send '{file_basename}' to {to}. Proceed?"
     
-    if _source == "voice":
+    if not _is_headless_source(_source):
         speak(confirm_msg)
         
     # Always ask UI (Remote) but also allow local voice reply if applicable
@@ -518,7 +568,7 @@ def find_and_send_file(filename: str = "", to: str = "", _source: str = "voice",
     )
 
     if confirmation and any(word in str(confirmation).lower() for word in ["yes", "yeah", "yep", "sure", "do it", "send", "open", "go"]):
-        if _source == "voice":
+        if not _is_headless_source(_source):
             speak("Opening Gmail with attachment.")
         else:
             # If confirmed via UI, have Jarvis acknowledge it on the PC too if desired
@@ -530,7 +580,13 @@ def find_and_send_file(filename: str = "", to: str = "", _source: str = "voice",
         )
         
         # Use playwright to open draft and attach
-        res = draft_email_with_attachment(to=to, subject=f"Sending: {file_basename}", body="", attachment_path=selected_file, announce=(_source == "voice"))
+        res = draft_email_with_attachment(
+            to=to,
+            subject=f"Sending: {file_basename}",
+            body="",
+            attachment_path=selected_file,
+            announce=(not _is_headless_source(_source)),
+        )
         if res.get("success"):
             if res.get("sent"):
                 return f"Sent! {file_basename} has been emailed to {to}. You can check your sent mail for confirmation."
@@ -539,7 +595,8 @@ def find_and_send_file(filename: str = "", to: str = "", _source: str = "voice",
         else:
             return f"Failed to send email: {res.get('error')}"
     else:
-        if _source == "voice": speak("Alright, cancelled.")
+        if not _is_headless_source(_source):
+            speak("Alright, cancelled.")
         return "Cancelled by user"
 
 # ─── Attachment-capable email draft ──────────────────────────────
@@ -550,10 +607,11 @@ def draft_email_with_attachment(
     body: str = "",
     attachment_path: str = None,
     announce: bool = True,
+    auto_send: bool = False,
 ) -> dict:
     """
-    Opens Gmail compose with the given fields pre-filled, then attaches
-    a file via Playwright browser automation.
+    Opens Gmail compose with the given fields pre-filled, optionally attaches
+    a file via Playwright browser automation, and optionally auto-sends.
 
     Args:
         to:              Recipient email address
@@ -561,12 +619,14 @@ def draft_email_with_attachment(
         body:            Email body text
         attachment_path: Absolute path to the file to attach (optional)
         announce:        If True, speak status updates (voice mode)
+        auto_send:       If True, automatically click Send after composing
 
     Returns:
         {
             "success": bool,
             "draft_opened": bool,
             "attachment_verified": bool,
+            "sent": bool,
             "error": str
         }
     """
@@ -574,6 +634,7 @@ def draft_email_with_attachment(
         "success": False,
         "draft_opened": False,
         "attachment_verified": False,
+        "sent": False,
         "error": "",
     }
 
@@ -596,35 +657,38 @@ def draft_email_with_attachment(
     compose_url = f"https://mail.google.com/mail/?view=cm&fs=1&{params}"
     print(f"📧 Gmail compose URL: {compose_url[:100]}...")
 
-    # ── Attempt Playwright attach ——————————————————————
-    if attachment_path:
+    # ── Use Playwright when we need auto-send OR have an attachment ──
+    if auto_send or attachment_path:
         try:
             from control.playwright_browser import open_gmail_compose_with_attachment
-            attach_result = open_gmail_compose_with_attachment(
+            pw_result = open_gmail_compose_with_attachment(
                 to=to,
                 subject=subject,
                 body=body,
                 file_path=attachment_path,
-                auto_send=True,
+                auto_send=auto_send,
             )
-            result["draft_opened"] = True
-            result["attachment_verified"] = attach_result.get("attachment_verified", False)
-            result["sent"] = attach_result.get("sent", False)
-            result["success"] = True
+            result["draft_opened"] = pw_result.get("draft_opened", False)
+            result["attachment_verified"] = pw_result.get("attachment_verified", False)
+            result["sent"] = pw_result.get("sent", False)
+            result["success"] = result["draft_opened"]
             if announce:
-                if result.get("sent"):
-                    speak(f"Done. Email sent to {to} with {os.path.basename(attachment_path)} attached.")
-                elif result["attachment_verified"]:
-                    speak(f"Draft opened with attachment. Please click send manually.")
+                if result["sent"]:
+                    msg = f"Done. Email sent to {to}."
+                    if attachment_path:
+                        msg = f"Done. Email sent to {to} with {os.path.basename(attachment_path)} attached."
+                    speak(msg)
+                elif result["draft_opened"]:
+                    speak("Draft opened. Please click send manually.")
                 else:
-                    speak("Gmail opened. Please verify the attachment and send manually.")
-            print(f"  ✔ Draft opened. Attachment: {result['attachment_verified']}, Sent: {result.get('sent', False)}")
+                    speak("Gmail opened. Please verify and send manually.")
+            print(f"  ✔ Playwright result: draft={result['draft_opened']}, sent={result['sent']}")
             return result
         except Exception as e:
-            print(f"  ⚠️  Playwright attach failed ({e}), falling back to URL open.")
+            print(f"  ⚠️  Playwright failed ({e}), falling back to URL open.")
             result["error"] = str(e)
 
-    # ── Fallback: open compose URL in default browser (no attachment) ———
+    # ── Fallback: open compose URL in default browser (no auto-send) ──
     try:
         webbrowser.open(compose_url)
         result["draft_opened"] = True
