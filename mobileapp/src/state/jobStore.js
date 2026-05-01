@@ -151,6 +151,13 @@ class JobStore {
     const job = this.getActiveJob();
     return job?.needsInput ?? false;
   }
+
+  /** Clear all jobs and reset state */
+  clearAllJobs() {
+    this._jobs.clear();
+    this._activeJobId = null;
+    this._notify();
+  }
 }
 
 // Singleton

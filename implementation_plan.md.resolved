@@ -1,0 +1,194 @@
+# Remaining Implementation Plan — Phase C + D
+
+## Completed So Far
+
+| Phase | Items | Status |
+|---|---|---|
+| **A — Critical Fixes** | Chat routing, File search, Training examples, Gemini fallback | ✅ All fixed in upstream |
+| **B — UX Polish** | Progress events, Step stepper, File previews, Session separators, Clear history, Backend suggestions | ✅ Implemented |
+
+---
+
+## Phase C — Smarts (2–3 hours)
+
+### C1. Smarter Dynamic Suggestions — Context-Aware
+
+> [!NOTE]
+> The backend `GET /suggestions` endpoint already exists with time-of-day logic. This enhancement adds **recent command history** and **capability-aware** suggestions.
+
+#### [MODIFY] [server.py](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/remote/server.py) — `GET /suggestions`
+
+- Query SQLite `jobs` table for the user's last 5 commands
+- Deduplicate and exclude commands already in the time-based set
+- Add a "Recent" section with the user's actual recent commands
+- Add capability-based suggestions (e.g., if Playwright is available → show browser commands)
+
+```python
+# New logic inside get_suggestions():
+from remote.db import get_recent_commands
+recent = get_recent_commands(device, limit=5)
+suggestions.extend([
+    {"cmd": r["command"], "icon": "🔁", "label": truncate(r["command"], 24)}
+    for r in recent if r["command"] not in {s["cmd"] for s in suggestions}
+][:3])
+```
+
+#### [MODIFY] [db.py](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/remote/db.py)
+
+- Add `get_recent_commands(user, limit)` query
+
+**Effort**: ~30 min
+
+---
+
+### C2. Error Retry Button
+
+> [!NOTE]
+> When a command fails, the user currently has to retype it. Adding a retry button on error cards is a small but impactful UX win.
+
+#### [MODIFY] [EventCard.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/EventCard.js)
+
+- For `error` type events, add a "Retry" button below the error message
+- On click, dispatch the original command text through the command input
+
+#### [MODIFY] [EventTimeline.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/EventTimeline.js)
+
+- Pass `onRetry(commandText)` callback through to EventCard
+- On retry, call `onCommandSubmit(commandText)` from MainScreen
+
+#### [MODIFY] [components.css](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/styles/components.css)
+
+- Style `.event-card__retry-btn` — small pill button with blue accent
+
+**Effort**: ~30 min
+
+---
+
+### C3. Multi-Step Workflow Stepper
+
+> [!IMPORTANT]
+> Compound commands like "find resume and send to X" go through multiple stages (search → disambiguate → ask recipient → confirm → send). Currently the user sees each stage as separate chat bubbles. This consolidates them into a single stepper card.
+
+#### [NEW] [WorkflowStepper.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/WorkflowStepper.js)
+
+- New component that groups sequential events from a single job into a vertical stepper
+- Each step shows: icon → label → status (pending/active/done/failed)
+- Connector lines between steps with animated fill
+
+#### [MODIFY] [EventTimeline.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/EventTimeline.js)
+
+- Detect multi-step jobs (>2 non-ack events before result)
+- Render `WorkflowStepper` instead of individual event cards for those jobs
+
+#### [MODIFY] [components.css](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/styles/components.css)
+
+- Stepper styles: `.workflow-stepper`, `.workflow-step`, `.workflow-step__connector`
+
+**Effort**: ~1.5 hours
+
+---
+
+### C4. Command History Dropdown in Input
+
+> [!NOTE]
+> Arrow-key history already works in the input field. This adds a **visible dropdown** of recent commands when the input is focused and empty.
+
+#### [MODIFY] [CommandInput.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/CommandInput.js)
+
+- On focus (when input is empty), show a dropdown of the last 8 commands from `jobStore`
+- Click to fill the input
+- Dismiss on blur or Escape
+
+#### [MODIFY] [components.css](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/styles/components.css)
+
+- `.command-history-dropdown` — glass-style floating panel above the input
+
+**Effort**: ~45 min
+
+---
+
+## Phase D — Stretch Features (4–6 hours)
+
+### D1. Push Notifications (Desktop → Mobile)
+
+> [!WARNING]
+> Requires HTTPS for the Push API to work on mobile browsers. During local dev, only works in Chrome on `localhost`.
+
+#### [NEW] [notifications.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/services/notifications.js)
+
+- Request notification permission on app start
+- Subscribe to a periodic poll endpoint `GET /notifications` (or piggyback on health check)
+- Show browser notifications for proactive events (battery low, unread emails, etc.)
+
+#### [MODIFY] [server.py](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/remote/server.py)
+
+- Add `GET /notifications` endpoint that returns pending proactive alerts
+- Add `POST /notifications/dismiss` to mark alerts as seen
+
+#### [NEW] Proactive alert sources in Python backend:
+- Battery check (periodic, alert at <15%)
+- Email count (when read_emails returns unread count)
+
+**Effort**: ~2 hours
+
+---
+
+### D2. Persistent Command History & Favorites
+
+#### [MODIFY] [jobStore.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/state/jobStore.js)
+
+- Persist completed jobs to `localStorage` (capped at 50)
+- On init, load from `localStorage`
+- Add `favoriteCommand(text)` and `getFavorites()` methods
+
+#### [MODIFY] [CommandInput.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/CommandInput.js)
+
+- Show ★ star icon on each history item to toggle favorite
+- Favorites always appear at top of history dropdown
+
+#### [MODIFY] [EventTimeline.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/EventTimeline.js)
+
+- In empty state, show "Favorites" section above suggestions (if any favorites exist)
+
+**Effort**: ~1.5 hours
+
+---
+
+### D3. Proactive Status Bar
+
+> [!NOTE]
+> A thin, ambient status strip above the command input that shows real-time desktop state: battery, current app, connection quality.
+
+#### [NEW] [StatusBar.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/components/StatusBar.js)
+
+- Polls `GET /status` every 30s for battery, active window, etc.
+- Renders as a subtle strip: `🔋 87% · 📱 Chrome · ✅ Connected`
+
+#### [MODIFY] [server.py](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/remote/server.py)
+
+- Add `GET /status` endpoint returning battery level, active window title
+
+#### [MODIFY] [MainScreen.js](file:///c:/Users/jithi/Documents/ARC_REMOTE/ARC-REMOTE-DA/mobileapp/src/screens/MainScreen.js)
+
+- Mount StatusBar between Header and main content
+
+**Effort**: ~1.5 hours
+
+---
+
+## Priority Recommendation
+
+| Priority | Item | Impact | Effort |
+|---|---|---|---|
+| 🔴 High | C2. Error Retry Button | Huge UX win, tiny effort | 30 min |
+| 🔴 High | C1. Context-Aware Suggestions | Makes app feel intelligent | 30 min |
+| 🟡 Medium | C4. History Dropdown | Discoverability improvement | 45 min |
+| 🟡 Medium | C3. Workflow Stepper | Premium feel for compound commands | 1.5 hrs |
+| 🟢 Low | D2. Persistent History + Favorites | Nice-to-have persistence | 1.5 hrs |
+| 🟢 Low | D3. Proactive Status Bar | Ambient awareness | 1.5 hrs |
+| 🟢 Low | D1. Push Notifications | Requires HTTPS, complex | 2 hrs |
+
+> [!IMPORTANT]
+> **Recommended next step**: Implement C1 + C2 together (~1 hour total) — these are the highest impact for the least effort. Then C3 (workflow stepper) for premium polish.
+
+Should I start implementing? Which items would you like to prioritize?

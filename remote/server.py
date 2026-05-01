@@ -126,8 +126,17 @@ def run_command(body: CommandIn, device: str = Depends(get_current_device)):
 
     def _run():
         try:
-            # Emit "executing" so the frontend sees immediate activity
-            job.add_event(JobEvent("executing", f"Processing: {body.text}", data={"action": "routing"}))
+            # ── Stage 1: Routing ─────────────────────────────────
+            job.add_event(JobEvent(
+                "progress", "Routing command...",
+                data={"stage": "routing", "step": 1, "total_steps": 4}
+            ))
+
+            # ── Stage 2: Classifying intent ──────────────────────
+            job.add_event(JobEvent(
+                "executing", f"Classifying: {body.text}",
+                data={"stage": "classifying", "step": 2, "total_steps": 4}
+            ))
 
             # Session ID is the job_id so intent_router can access it
             res = runtime.execute_text_command(
@@ -138,10 +147,16 @@ def run_command(body: CommandIn, device: str = Depends(get_current_device)):
             )
 
             if res.status == "completed":
-                # Emit verify before final result for rich timeline
                 action = getattr(res, 'interpreted_action', None) or res.to_dict().get('interpreted_action', '')
+
+                # ── Stage 3: Verification (skip for chat/question intents)
                 if action and action not in ('general_chat', 'answer_question', 'chat_response'):
-                    job.add_event(JobEvent("verify", f"Verified: {action}", data={"action": action}))
+                    job.add_event(JobEvent(
+                        "verify", f"Verified: {action}",
+                        data={"stage": "verifying", "action": action, "step": 3, "total_steps": 4}
+                    ))
+
+                # ── Stage 4: Final result ────────────────────────
                 job.add_event(JobEvent("result", res.final_result or "Completed", data=res.to_dict()))
             else:
                 job.add_event(JobEvent("error", res.final_result or "Failed", data=res.to_dict()))

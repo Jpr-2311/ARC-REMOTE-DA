@@ -1,16 +1,47 @@
 /**
  * ARC Controller — Event Timeline Component (Chat-Style)
- * Renders a chat-bubble conversation view instead of a flat timeline.
+ * Renders a chat-bubble conversation view with session separators,
+ * dynamic suggestions, and history controls.
  */
 
 import jobStore from '../state/jobStore.js';
 import { renderEventCard } from './EventCard.js';
 import { escapeHtml, truncate } from '../utils/helpers.js';
+import appState from '../state/appState.js';
+
+/** Cache fetched suggestions for 5 minutes */
+let _suggestionsCache = null;
+let _suggestionsFetchedAt = 0;
+const SUGGESTIONS_TTL = 5 * 60 * 1000;
 
 /**
- * Get dynamic suggestions based on time of day and context.
+ * Get dynamic suggestions — try backend first, fall back to client-side.
  */
-function getDynamicSuggestions() {
+async function getDynamicSuggestions() {
+  // Try backend endpoint if connected
+  if (appState.connected && appState.token && !appState.useMocks) {
+    const now = Date.now();
+    if (_suggestionsCache && (now - _suggestionsFetchedAt) < SUGGESTIONS_TTL) {
+      return _suggestionsCache;
+    }
+    try {
+      const { fetchSuggestions } = await import('../api/http.js');
+      const data = await fetchSuggestions();
+      if (data?.suggestions?.length) {
+        _suggestionsCache = data.suggestions.slice(0, 6);
+        _suggestionsFetchedAt = now;
+        return _suggestionsCache;
+      }
+    } catch (e) {
+      console.warn('Could not fetch suggestions from backend:', e);
+    }
+  }
+
+  // Fallback: client-side time-based suggestions
+  return _getClientSuggestions();
+}
+
+function _getClientSuggestions() {
   const hour = new Date().getHours();
   const allSuggestions = [];
 
@@ -58,6 +89,34 @@ function getDynamicSuggestions() {
 }
 
 /**
+ * Check if two timestamps are in different "sessions" (>5 min gap).
+ */
+function _isDifferentSession(ts1, ts2) {
+  if (!ts1 || !ts2) return false;
+  return Math.abs(ts1 - ts2) > 300; // 5 minutes
+}
+
+/**
+ * Format a session separator timestamp.
+ */
+function _formatSessionTime(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(timestamp * 1000);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (isToday) return `Today at ${time}`;
+  if (isYesterday) return `Yesterday at ${time}`;
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${time}`;
+}
+
+/**
  * Render the timeline container and subscribe to updates.
  * @param {Function} onReply - Callback when user replies
  */
@@ -65,11 +124,11 @@ export function renderEventTimeline(onReply) {
   const container = document.createElement('div');
   container.id = 'event-timeline';
 
-  function render() {
+  async function render() {
     const jobs = jobStore.getAllJobs();
 
     if (jobs.length === 0) {
-      const suggestions = getDynamicSuggestions();
+      const suggestions = await getDynamicSuggestions();
       container.innerHTML = `
         <div class="empty-state">
           <div class="empty-state__icon">⚡</div>
@@ -78,7 +137,7 @@ export function renderEventTimeline(onReply) {
             Type a natural language command below to control your desktop remotely.
           </p>
           <div class="empty-state__hints" id="hint-buttons">
-            ${suggestions.map(s => `
+            ${(Array.isArray(suggestions) ? suggestions : []).map(s => `
               <button class="empty-state__hint" data-cmd="${escapeHtml(s.cmd)}">
                 <span class="empty-state__hint-icon">${s.icon}</span>
                 <span>${escapeHtml(s.label)}</span>
@@ -105,7 +164,38 @@ export function renderEventTimeline(onReply) {
     // Build chat-style timeline for all jobs
     const fragment = document.createDocumentFragment();
 
-    jobs.forEach((job) => {
+    // ── Clear history button ──────────────────────────────
+    const clearRow = document.createElement('div');
+    clearRow.className = 'timeline__clear-row';
+    clearRow.innerHTML = `
+      <button class="timeline__clear-btn" id="clear-history-btn" title="Clear conversation history">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M2 4h12M5.3 4V2.7a.7.7 0 0 1 .7-.7h4a.7.7 0 0 1 .7.7V4M6.5 7v4.5M9.5 7v4.5M3.5 4l.7 9.3a1.4 1.4 0 0 0 1.4 1.2h4.8a1.4 1.4 0 0 0 1.4-1.2L12.5 4"/>
+        </svg>
+        Clear
+      </button>
+    `;
+    fragment.appendChild(clearRow);
+
+    // Reverse so oldest job is first (we reverse back for display)
+    const orderedJobs = [...jobs].reverse();
+
+    orderedJobs.forEach((job, jobIdx) => {
+      // ── Session separator ──────────────────────────────
+      if (jobIdx > 0) {
+        const prevJob = orderedJobs[jobIdx - 1];
+        if (_isDifferentSession(prevJob.createdAt, job.createdAt)) {
+          const separator = document.createElement('div');
+          separator.className = 'job-separator';
+          separator.innerHTML = `
+            <div class="job-separator__line"></div>
+            <span class="job-separator__text">${_formatSessionTime(job.createdAt)}</span>
+            <div class="job-separator__line"></div>
+          `;
+          fragment.appendChild(separator);
+        }
+      }
+
       // ── User message bubble ────────────────────────────
       const userBubble = document.createElement('div');
       userBubble.className = 'chat-bubble chat-bubble--user';
@@ -193,6 +283,21 @@ export function renderEventTimeline(onReply) {
 
     container.innerHTML = '';
     container.appendChild(fragment);
+
+    // ── Clear history handler ──────────────────────────
+    const clearBtn = container.querySelector('#clear-history-btn');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        if (jobStore.clearAllJobs) {
+          jobStore.clearAllJobs();
+        } else {
+          // Fallback: reset the internal map
+          jobStore._jobs.clear();
+          jobStore._activeJobId = null;
+          jobStore._notify();
+        }
+      });
+    }
 
     // Auto-scroll to bottom
     requestAnimationFrame(() => {

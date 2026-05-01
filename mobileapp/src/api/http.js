@@ -128,3 +128,11 @@ export async function checkHealth() {
     clearTimeout(timeout);
   }
 }
+
+/**
+ * GET /suggestions — Fetch dynamic command suggestions from the backend.
+ * @returns {Promise<{suggestions: Array<{cmd: string, icon: string, label: string}>}>}
+ */
+export async function fetchSuggestions() {
+  return request('GET', '/suggestions');
+}
