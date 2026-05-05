@@ -638,19 +638,21 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
         if action == "brightness_up":
             amount = params.get("amount") or 10
             if "brightness_up" in actions:
-                steps = max(1, min(16, round(float(amount) / 10)))
+                # macOS has 16 brightness steps; map percentage → key presses correctly
+                steps = max(1, min(16, round(float(amount) * 16 / 100)))
                 for _ in range(steps):
                     actions["brightness_up"]()
-                message = f"Brightness up by {amount}"
+                message = f"Brightness up by {amount}%"
                 return ActionResult.ok(action, message, data={"amount": amount}, user_message=f"{message}.")
 
         if action == "brightness_down":
             amount = params.get("amount") or 10
             if "brightness_down" in actions:
-                steps = max(1, min(16, round(float(amount) / 10)))
+                # macOS has 16 brightness steps; map percentage → key presses correctly
+                steps = max(1, min(16, round(float(amount) * 16 / 100)))
                 for _ in range(steps):
                     actions["brightness_down"]()
-                message = f"Brightness down by {amount}"
+                message = f"Brightness down by {amount}%"
                 return ActionResult.ok(action, message, data={"amount": amount}, user_message=f"{message}.")
 
         # ── Search Google ───────────────────────────────────
@@ -1961,7 +1963,10 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
                 elif gemini_type == "action" and gemini_action:
                     # Gemini resolved an action — execute it
                     ack_text = get_ack(gemini_action)
-                    merged_params = _merge_gemini_params(gemini_result, params)
+                    # Re-extract params for the CORRECTED action (Gemini may have changed
+                    # the action, so original params may be for the wrong intent).
+                    corrected_params = _extract_params(gemini_action, cleaned)
+                    merged_params = _merge_gemini_params(gemini_result, corrected_params or params)
                     before_state = _capture_before_state(gemini_action, merged_params)
                     exec_result = _execute_action(
                         gemini_action, merged_params, actions,
