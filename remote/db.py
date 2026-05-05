@@ -55,3 +55,30 @@ def save_job_event(job_id: str, event_type: str, message: str, data: dict, times
             "INSERT INTO job_events (job_id, type, message, data, timestamp) VALUES (?, ?, ?, ?, ?)",
             (job_id, event_type, message, json.dumps(data), timestamp)
         )
+
+
+def get_recent_commands(user: str, limit: int = 5) -> list[dict]:
+    """
+    Returns the last `limit` distinct commands run by a device/user.
+    Excludes empty commands and health-check noise.
+    """
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT command, MAX(created_at) AS ts
+            FROM jobs
+            WHERE user = ?
+              AND command IS NOT NULL
+              AND command != ''
+              AND command NOT LIKE '%health%'
+            GROUP BY command
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            (user, limit),
+        ).fetchall()
+        return [{"command": r["command"], "timestamp": r["ts"]} for r in rows]
+    except Exception:
+        return []
+

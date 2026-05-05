@@ -946,12 +946,47 @@ def _execute_action(action: str, params: dict, actions: dict, text: str = "", _s
                 fallback = "I'm ARC — I can help control this laptop. Ask me to open apps, find files, or send emails."
                 return ActionResult.ok(action, fallback, user_message=fallback)
 
+        # ── Screenshot ───────────────────────────────────────
+        if action == "take_screenshot":
+            if "take_screenshot" in actions:
+                path = actions["take_screenshot"]()
+                if path and isinstance(path, str):
+                    from core.memory import update_file_context
+                    update_file_context(os.path.basename(path), path=path, action="take_screenshot")
+                    return ActionResult.ok(
+                        action,
+                        f"Screenshot saved to {path}",
+                        data={"path": path, "filename": os.path.basename(path)},
+                        user_message=f"Screenshot saved to Desktop.",
+                    )
+                return ActionResult.ok(action, "Screenshot saved.", user_message="Screenshot saved.")
+
+        # ── Battery ─────────────────────────────────────────
+        if action == "get_battery":
+            if "get_battery" in actions:
+                message = actions["get_battery"]()
+                if message and isinstance(message, str):
+                    return ActionResult.ok(
+                        action, message,
+                        data={"battery": message},
+                        user_message=message,
+                    )
+                return ActionResult.ok(action, "Checked battery.", user_message="Checked battery.")
+
+        # ── Volume level ────────────────────────────────────
+        if action == "get_volume":
+            if "get_volume" in actions:
+                message = actions["get_volume"]()
+                if message and isinstance(message, str):
+                    return ActionResult.ok(action, message, user_message=message)
+                return ActionResult.ok(action, "Checked volume.")
+
         # ── Generic action ──────────────────────────────────
         if action in actions:
             result = actions[action]()
             if isinstance(result, str) and result.strip():
                 message = result.strip()
-                direct_answer_actions = {"tell_time", "tell_date", "tell_weather", "get_battery"}
+                direct_answer_actions = {"tell_time", "tell_date", "tell_weather", "get_battery", "get_volume"}
                 return ActionResult.ok(
                     action,
                     message,
@@ -1323,6 +1358,76 @@ def route(command: str, actions: dict, _source: str = "voice", _request_id: str 
     if is_find_and_send_command(cleaned):
         print(f"⚙️  Compound search and send detected")
         return _handle_find_and_send_command(command, cleaned, actions, start_time, _source, _request_id)
+    # ── Step 2.7: Send context reference? ("send that screenshot to X") ─
+    from core.param_extractors import is_send_context_command, extract_send_context_params
+    if is_send_context_command(cleaned):
+        ctx_params = extract_send_context_params(cleaned)
+        to_email = ctx_params.get("to")
+        context_noun = ctx_params.get("context_noun", "")
+
+        # Resolve what "that screenshot/file" refers to
+        attachment_path = None
+        if context_noun in ("screenshot", "photo", "image", "pic", "picture"):
+            last_file = get_last_file()
+            if last_file.get("path"):
+                attachment_path = last_file["path"]
+            elif last_file.get("filename"):
+                attachment_path = last_file["filename"]
+        elif context_noun in ("file", "document", "pdf", "attachment", "it"):
+            last_file = get_last_file()
+            if last_file.get("path"):
+                attachment_path = last_file["path"]
+            elif last_file.get("filename"):
+                attachment_path = last_file["filename"]
+
+        if to_email and attachment_path:
+            print(f"📎 Send context command: sending '{attachment_path}' to {to_email}")
+            update_thinking(command=command, intent="send_email", stage="Context Send")
+            try:
+                from control.email_control import find_and_send_file
+                result_text = find_and_send_file(
+                    filename=os.path.basename(attachment_path),
+                    to=to_email,
+                    _source=_source,
+                    _request_id=_request_id,
+                )
+            except Exception as e:
+                result_text = f"Failed to send: {e}"
+
+            latency_ms = (time.time() - start_time) * 1000
+            log_interaction(
+                you_said=command, action_taken="send_context_file",
+                was_understood=True, intent_source="context_rule",
+                confidence=1.0, latency_ms=latency_ms,
+                normalized_text=cleaned,
+                params={"to": to_email, "attachment": attachment_path},
+                spoken_text=result_text,
+            )
+            save_exchange(command, result_text)
+
+            try:
+                from core.command_models import CommandResponse, ExecutionStatus, StepResult
+                from core.runtime import store_result
+                step = StepResult(step_id=0, action="send_context_file", status="success", summary=result_text,
+                                  data={"to": to_email, "attachment": attachment_path})
+                resp = CommandResponse(
+                    request_id=_request_id,
+                    status=ExecutionStatus.COMPLETED if "Failed" not in result_text else ExecutionStatus.FAILED,
+                    interpreted_action="send_email",
+                    final_result=result_text,
+                    steps=[step],
+                    data={"to": to_email, "attachment": attachment_path},
+                    errors=[result_text] if "Failed" in result_text else [],
+                    elapsed_ms=latency_ms,
+                    source=_source,
+                )
+                store_result(resp)
+            except Exception as e:
+                print(f"Error storing context send result: {e}")
+            return True
+        elif to_email and not attachment_path:
+            print(f"⚠️  Send context command but no recent file/screenshot in context")
+            # Fall through to normal routing — it'll ask or handle differently
 
     # ── Step 3: Check learned intents (exact match) ──────────
     learned = find_exact_match(cleaned)

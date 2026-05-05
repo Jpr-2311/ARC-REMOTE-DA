@@ -549,6 +549,51 @@ def extract_find_and_send_params(text: str) -> dict:
     return result
 
 
+# ─── Send Context Reference Detection ────────────────────────
+def is_send_context_command(text: str) -> bool:
+    """
+    Detect commands that reference a previous result to send.
+    e.g. "send that screenshot to X", "send this file to X",
+         "email that to X", "send it to X"
+    """
+    return bool(re.search(
+        r'\b(?:send|email|mail|forward)\b\s+'
+        r'(?:that|this|the|it|my)?\s*'
+        r'(?:screenshot|file|document|photo|image|pic|picture|pdf|attachment)?\s*'
+        r'(?:to)\s+\S+@\S+',
+        text, re.IGNORECASE
+    ))
+
+
+def extract_send_context_params(text: str) -> dict:
+    """
+    Extract params from 'send that screenshot to X@email.com'.
+    Returns dict with 'to' (email), 'context_noun' (what they're referring to).
+    """
+    result = {"to": None, "context_noun": None}
+
+    # Extract email address
+    email_match = re.search(r'[\w.+-]+@[\w-]+\.[\w.]+', text)
+    if email_match:
+        result["to"] = email_match.group(0)
+
+    # Extract what they're referring to
+    noun_match = re.search(
+        r'(?:send|email|mail|forward)\s+'
+        r'(?:that|this|the|my)\s+'
+        r'(screenshot|file|document|photo|image|pic|picture|pdf|attachment)',
+        text, re.IGNORECASE
+    )
+    if noun_match:
+        result["context_noun"] = noun_match.group(1).lower()
+    else:
+        # "send it to X" — generic reference
+        if re.search(r'(?:send|email)\s+(?:it|that|this)\s+to', text, re.IGNORECASE):
+            result["context_noun"] = "it"
+
+    return result
+
+
 def extract_url(text: str) -> Optional[str]:
     """
     Pull an http(s) URL or bare domain from natural language.

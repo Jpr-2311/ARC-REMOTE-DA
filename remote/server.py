@@ -232,49 +232,101 @@ import datetime
 @app.get("/suggestions")
 def get_suggestions(device: str = Depends(get_current_device)):
     """
-    Returns dynamic command suggestions based on time of day.
-    Used by the mobile app to show contextual hint buttons.
+    Returns dynamic command suggestions based on:
+    1. Time of day (morning / afternoon / evening / night)
+    2. Recent command history for this device (last 5 distinct commands)
+    3. Capability-aware extras (Playwright browser, etc.)
     """
+    from remote.db import get_recent_commands
+
     hour = datetime.datetime.now().hour
     suggestions = []
 
-    # Time-based suggestions
+    # ── 1. Time-based suggestions ────────────────────────────────
     if 5 <= hour < 12:
         suggestions.extend([
-            {"cmd": "good morning", "icon": "☀️", "label": "Good morning"},
-            {"cmd": "read my emails", "icon": "📧", "label": "Check emails"},
-            {"cmd": "read the news", "icon": "📰", "label": "Today's news"},
+            {"cmd": "good morning",   "icon": "☀️",  "label": "Good morning"},
+            {"cmd": "read my emails", "icon": "📧",  "label": "Check emails"},
+            {"cmd": "read the news",  "icon": "📰",  "label": "Today's news"},
         ])
     elif 12 <= hour < 17:
         suggestions.extend([
-            {"cmd": "take a screenshot", "icon": "📸", "label": "Screenshot"},
-            {"cmd": "what time is it", "icon": "🕐", "label": "Check time"},
-            {"cmd": "search my emails", "icon": "📧", "label": "Search emails"},
+            {"cmd": "take a screenshot",  "icon": "📸", "label": "Screenshot"},
+            {"cmd": "what time is it",    "icon": "🕐", "label": "Check time"},
+            {"cmd": "search my emails",   "icon": "📧", "label": "Search emails"},
         ])
     elif 17 <= hour < 22:
         suggestions.extend([
-            {"cmd": "play some music", "icon": "🎵", "label": "Play music"},
-            {"cmd": "get battery level", "icon": "🔋", "label": "Battery"},
-            {"cmd": "lock screen", "icon": "🔒", "label": "Lock screen"},
+            {"cmd": "play some music",  "icon": "🎵", "label": "Play music"},
+            {"cmd": "get battery level","icon": "🔋", "label": "Battery"},
+            {"cmd": "lock screen",      "icon": "🔒", "label": "Lock screen"},
         ])
     else:
         suggestions.extend([
             {"cmd": "good night", "icon": "🌙", "label": "Good night"},
-            {"cmd": "lock screen", "icon": "🔒", "label": "Lock screen"},
-            {"cmd": "sleep", "icon": "😴", "label": "Sleep Mac"},
+            {"cmd": "lock screen","icon": "🔒", "label": "Lock screen"},
+            {"cmd": "sleep",      "icon": "😴", "label": "Sleep Mac"},
         ])
 
-    # Always available
+    # ── 2. Always-available core shortcuts ───────────────────────
     suggestions.extend([
-        {"cmd": "open chrome", "icon": "🌐", "label": "Open Chrome"},
-        {"cmd": "find my files", "icon": "📁", "label": "Find files"},
-        {"cmd": "volume up", "icon": "🔊", "label": "Volume up"},
-        {"cmd": "send an email", "icon": "✉️", "label": "Send email"},
-        {"cmd": "create a file", "icon": "📄", "label": "New file"},
-        {"cmd": "what can you do", "icon": "💡", "label": "Help"},
+        {"cmd": "open chrome",    "icon": "🌐", "label": "Open Chrome"},
+        {"cmd": "find my files",  "icon": "📁", "label": "Find files"},
+        {"cmd": "volume up",      "icon": "🔊", "label": "Volume up"},
+        {"cmd": "send an email",  "icon": "✉️", "label": "Send email"},
+        {"cmd": "create a file",  "icon": "📄", "label": "New file"},
+        {"cmd": "what can you do","icon": "💡", "label": "Help"},
     ])
 
+    # ── 3. Capability-aware: Playwright browser ───────────────────
+    try:
+        import importlib.util
+        if importlib.util.find_spec("playwright") is not None:
+            suggestions.extend([
+                {"cmd": "open youtube", "icon": "▶️",  "label": "YouTube"},
+                {"cmd": "open google",  "icon": "🔍",  "label": "Google"},
+            ])
+    except Exception:
+        pass
+
+    # ── 4. Recent command history for this device ─────────────────
+    recent_cmds = get_recent_commands(device, limit=5)
+    already = {s["cmd"] for s in suggestions}
+
+    # Icon heuristics for recent commands
+    def _icon_for(cmd: str) -> str:
+        cmd_l = cmd.lower()
+        if "battery"    in cmd_l: return "🔋"
+        if "screenshot" in cmd_l: return "📸"
+        if "email"      in cmd_l: return "📧"
+        if "music"      in cmd_l or "play"   in cmd_l: return "🎵"
+        if "volume"     in cmd_l: return "🔊"
+        if "brightness" in cmd_l: return "☀️"
+        if "file"       in cmd_l or "create" in cmd_l: return "📄"
+        if "open"       in cmd_l: return "🚀"
+        if "search"     in cmd_l or "find"   in cmd_l: return "🔍"
+        if "lock"       in cmd_l or "sleep"  in cmd_l: return "🔒"
+        return "🔁"
+
+    def _truncate(s: str, n: int = 24) -> str:
+        return s if len(s) <= n else s[:n - 1] + "…"
+
+    recent_suggestions = [
+        {
+            "cmd":   r["command"],
+            "icon":  _icon_for(r["command"]),
+            "label": _truncate(r["command"], 24),
+            "recent": True,
+        }
+        for r in recent_cmds
+        if r["command"] not in already
+    ][:3]  # cap at 3 recent
+
+    # Prepend recent so they appear first in the UI
+    suggestions = recent_suggestions + suggestions
+
     return {"suggestions": suggestions}
+
 
 if __name__ == "__main__":
     import uvicorn

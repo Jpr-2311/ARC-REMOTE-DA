@@ -6,7 +6,7 @@
     "weekday": -1,
     "occurrences": 3,
     "confidence": 1.0,
-    "last_seen": "2026-04-30 00:42:41",
+    "last_seen": "2026-05-05 21:15:07",
     "description": "chat_response usually at 1:00 (3 times, 100% confidence)"
   },
   {
@@ -28,7 +28,7 @@
     "weekday": -1,
     "occurrences": 3,
     "confidence": 1.0,
-    "last_seen": "2026-04-30 00:42:41",
+    "last_seen": "2026-05-05 21:15:07",
     "description": "sleep_mac_cancelled usually at 2:00 (3 times, 100% confidence)"
   },
   {
@@ -78,13 +78,23 @@
     "description": "After brightness_up, usually does sleep_mac_cancelled (3 times, 75%)"
   },
   {
+    "action": "get_battery",
+    "params": {},
+    "hour": 21,
+    "weekday": -1,
+    "occurrences": 2,
+    "confidence": 0.667,
+    "last_seen": "2026-05-05 21:15:07",
+    "description": "get_battery usually at 21:00 (2 times, 67% confidence)"
+  },
+  {
     "action": "tell_time",
     "params": {},
     "hour": 2,
     "weekday": -1,
     "occurrences": 8,
     "confidence": 0.615,
-    "last_seen": "2026-04-30 00:42:41",
+    "last_seen": "2026-05-05 21:15:07",
     "description": "tell_time usually at 2:00 (8 times, 62% confidence)"
   }
 ]

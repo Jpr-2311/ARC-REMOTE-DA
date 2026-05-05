@@ -49,13 +49,14 @@ def brightness_down() -> None:
 
 # ─── Screenshot ──────────────────────────────────────────────
 
-def take_screenshot() -> None:
-    """Takes a screenshot and saves to Desktop."""
+def take_screenshot() -> str:
+    """Takes a screenshot and saves to Desktop. Returns the file path."""
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path      = os.path.expanduser(f"~/Desktop/screenshot_{timestamp}.png")
     os.system(f"screencapture '{path}'")
     print(f"📸 Saved: {path}")
+    return path
 
 
 # ─── Window Management ───────────────────────────────────────
@@ -99,8 +100,8 @@ def do_not_disturb_on() -> None:
 
 # ─── Battery ─────────────────────────────────────────────────
 
-def get_battery() -> None:
-    """Tells current battery level."""
+def get_battery() -> str:
+    """Tells current battery level. Returns the status string."""
     result = subprocess.run(
         ["pmset", "-g", "batt"],
         capture_output=True, text=True
@@ -112,10 +113,13 @@ def get_battery() -> None:
     if match:
         percent = match.group(1)
         charging = "charging" if "AC Power" in output else "on battery"
-        speak(f"Battery is at {percent} percent and {charging}.")
+        message = f"Battery is at {percent} percent and {charging}."
+        speak(message)
         print(f"🔋 Battery: {percent}% ({charging})")
+        return message
     else:
         speak("Couldn't read battery level.")
+        return "Couldn't read battery level."
 
 
 # ─── Smart Sequences ─────────────────────────────────────────

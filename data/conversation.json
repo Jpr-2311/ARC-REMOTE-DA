@@ -1,50 +1,5 @@
 [
   {
-    "timestamp": "2026-04-24 22:02:33",
-    "you": "no",
-    "jarvis": "Suit yourself. I'll be here if you decide you actually need something productive done."
-  },
-  {
-    "timestamp": "2026-04-24 22:03:05",
-    "you": "i want to send a mail to jithinpr888@gmail.com",
-    "jarvis": "On it. Email sent."
-  },
-  {
-    "timestamp": "2026-04-24 22:04:27",
-    "you": "brightnoess down by 50%",
-    "jarvis": "Dimmer. Brightness down."
-  },
-  {
-    "timestamp": "2026-04-24 22:04:52",
-    "you": "dim brightness by 50",
-    "jarvis": "Brighter. Brightness up."
-  },
-  {
-    "timestamp": "2026-04-24 22:05:12",
-    "you": "increase volume by 1000",
-    "jarvis": "Louder. Volume up."
-  },
-  {
-    "timestamp": "2026-04-24 22:05:31",
-    "you": "increase volume by 50%",
-    "jarvis": "Turning up. Volume up."
-  },
-  {
-    "timestamp": "2026-04-24 22:06:18",
-    "you": "find abc whihc is a text file..to jithinpr888@gmail.com",
-    "jarvis": "Got it. Searched for file abc whihc is a text file..to jithinpr888@gmail.com"
-  },
-  {
-    "timestamp": "2026-04-24 22:07:20",
-    "you": "what is todays date",
-    "jarvis": "Today is Friday, April 24"
-  },
-  {
-    "timestamp": "2026-04-24 22:07:31",
-    "you": "screenshot",
-    "jarvis": "Screenshot taken. Screenshot saved."
-  },
-  {
     "timestamp": "2026-04-24 22:08:11",
     "you": "send that screenshot to jithinpr888@gmail.com",
     "jarvis": "Captured. Screenshot saved."
@@ -98,5 +53,50 @@
     "timestamp": "2026-04-24 22:40:52",
     "you": "search for file abc.txt",
     "jarvis": "Got it. Showed recent files"
+  },
+  {
+    "timestamp": "2026-05-05 20:57:29",
+    "you": "get battery level",
+    "jarvis": "Checking. Executed get_battery"
+  },
+  {
+    "timestamp": "2026-05-05 20:58:01",
+    "you": "take a screenshot of screen",
+    "jarvis": "Screenshot taken. Screenshot saved."
+  },
+  {
+    "timestamp": "2026-05-05 20:58:21",
+    "you": "send that screenshot to aariyansunu28@gmail.com",
+    "jarvis": "Captured. Screenshot saved."
+  },
+  {
+    "timestamp": "2026-05-05 21:09:10",
+    "you": "get battery level",
+    "jarvis": "Checking. Battery is at 25 percent and on battery."
+  },
+  {
+    "timestamp": "2026-05-05 21:11:11",
+    "you": "get battery level",
+    "jarvis": "Checking. Battery is at 25 percent and on battery."
+  },
+  {
+    "timestamp": "2026-05-05 21:11:37",
+    "you": "decrese the birghtness by 50%",
+    "jarvis": null
+  },
+  {
+    "timestamp": "2026-05-05 21:13:05",
+    "you": "send a mail to aariyansunu28@gmail.com",
+    "jarvis": "On it. Draft opened in Gmail \u2014 auto-send was not available."
+  },
+  {
+    "timestamp": "2026-05-05 21:14:36",
+    "you": "fuck off",
+    "jarvis": "Whoa, someone's feeling spicy today. I'll be here when you're done throwing your little tantrum."
+  },
+  {
+    "timestamp": "2026-05-05 21:15:07",
+    "you": "search for a file resume i think its a pdf file",
+    "jarvis": "Reading. Couldn't read that file."
   }
 ]

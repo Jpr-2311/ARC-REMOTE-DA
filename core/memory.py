@@ -239,6 +239,8 @@ FILE_CONTEXT_PHRASES = [
     "that file", "the file", "this file", "the particular file",
     "that particular file", "that document", "the document",
     "this document", "that note", "the note",
+    "that screenshot", "the screenshot", "this screenshot",
+    "that photo", "the photo", "that image", "the image",
 ]
 
 

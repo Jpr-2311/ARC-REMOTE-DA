@@ -65,24 +65,63 @@ def read_file(name: str, location: str = None) -> None:
 
     print(f"📄 Found: {path}")
 
-    try:
-        with open(path, "r", errors="ignore") as f:
-            content = f.read().strip()
+    ext = os.path.splitext(path)[1].lower()
 
-        if not content:
-            speak("The file is empty.")
+    # ── Binary / non-text formats ────────────────────────────────
+    BINARY_EXTS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+                   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+                   ".mp3", ".mp4", ".mov", ".avi", ".zip", ".tar", ".gz",
+                   ".pages", ".numbers", ".key", ".exe", ".bin", ".dmg"}
+    if ext in BINARY_EXTS:
+        if ext == ".pdf":
+            # Try PyMuPDF / pdfminer if available, else open in Preview
+            try:
+                import fitz  # PyMuPDF
+                doc = fitz.open(path)
+                text = ""
+                for page in doc[:3]:   # first 3 pages max
+                    text += page.get_text()
+                doc.close()
+                if text.strip():
+                    if len(text) > 800:
+                        text = text[:800]
+                        speak("Here's the beginning of the PDF:")
+                    speak(text.strip())
+                    return
+            except ImportError:
+                pass
+            # Fallback: open in Preview
+            speak(f"Opening {name} in Preview — I can't read PDF text directly.")
+            subprocess.Popen(["open", path])
+            return
+        else:
+            speak(f"{name} is a {ext.lstrip('.')} file — I can't read that as text. Opening it instead.")
+            subprocess.Popen(["open", path])
             return
 
-        # Truncate if too long
-        if len(content) > 1000:
-            content = content[:1000]
-            speak(f"File is long — reading the first part.")
-
-        speak(content)
-
+    try:
+        with open(path, "r", encoding="utf-8", errors="strict") as f:
+            content = f.read().strip()
+    except UnicodeDecodeError:
+        # File has binary content despite a text-looking extension
+        speak(f"That file appears to contain binary data — I can't read it aloud.")
+        return
     except Exception as e:
         speak(f"Couldn't read that file.")
         print(f"❌ Error: {e}")
+        return
+
+    if not content:
+        speak("The file is empty.")
+        return
+
+    # Truncate if too long
+    if len(content) > 1000:
+        content = content[:1000]
+        speak(f"File is long — reading the first part.")
+
+    speak(content)
+
 
 
 def create_file(name: str, location: str = "desktop") -> None:

@@ -20,12 +20,15 @@
     "take a screenshot": 3,
     "take screenshot": 1,
     "screenshot": 1,
-    "send that screenshot to jithinpr888@gmail.com": 1
+    "send that screenshot to jithinpr888@gmail.com": 1,
+    "take a screenshot of screen": 1,
+    "send that screenshot to aariyansunu28@gmail.com": 1
   },
   "send_email": {
     "sent abc.txt to jithinpr888@gmail.com": 3,
     "send a emails to jithinpr888@gmail.com whith subject cool shit": 1,
-    "send a emails to jithinpr888@gmail.com": 1
+    "send a emails to jithinpr888@gmail.com": 1,
+    "send a emails to aariyansunu28@gmail.com": 1
   },
   "read_emails": {
     "check emails": 1,
@@ -52,7 +55,8 @@
     "what is todays news": 1
   },
   "get_battery": {
-    "what is my battery percentage": 1
+    "what is my battery percentage": 1,
+    "get battery level": 3
   },
   "open_gmail": {
     "open gmail": 1

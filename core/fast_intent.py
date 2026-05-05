@@ -102,6 +102,10 @@ INTENT_REGISTRY = {
     "brightness_down": [
         "brightness down", "decrease brightness", "dimmer",
         "make it dimmer", "screen dimmer", "less brightness",
+        "decrease the brightness by 50", "decrease brightness by 50 percent",
+        "lower the brightness by 50", "reduce brightness by half",
+        "dim the screen by 50", "brightness down by 50",
+        "turn down brightness by 50 percent", "reduce the brightness",
     ],
 
     # ── System ───────────────────────────────────────────────
@@ -210,6 +214,16 @@ INTENT_REGISTRY = {
         "locate my budget file", "where did I save that",
         "find a file called abc", "search for a file named report",
         "find my file abc", "look for file named notes",
+        # ── 'search for a file X' patterns ───────────────────
+        "search for a file resume", "search for a file called notes",
+        "search for a file named resume", "search for a pdf file",
+        "search for a file resume i think its a pdf",
+        "i think its a pdf file", "look for a file named resume",
+        "can you find a file called resume", "find the resume file",
+        "search for my resume pdf", "find my pdf resume",
+        "look for a pdf called resume", "search for a pdf resume",
+        "find any file called resume", "search for my notes file",
+        "can you find my resume", "help me find my resume",
         # ── Find and send compound ───────────────────────────
         "find abc and send it to", "find resume and email it to",
         "search for report and send to", "look for notes and email",
@@ -605,6 +619,19 @@ NEGATIVE_EXAMPLES = {
         "send an email to my boss", "email my boss",
         "write an email", "send mail to",
         "compose an email to", "draft an email",
+    ],
+    # Prevent read_file from matching search-for-file queries
+    "read_file": [
+        "search for a file", "find a file", "look for a file",
+        "search for my file", "can you find a file",
+        "find my file", "where is my file",
+        "search for a pdf file", "find a pdf",
+        "locate my file", "help me find",
+    ],
+    # Prevent resize_window matching brightness % commands
+    "resize_window": [
+        "decrease brightness by 50", "brightness down by 50 percent",
+        "reduce brightness", "lower brightness", "dim screen",
     ],
 }
 
